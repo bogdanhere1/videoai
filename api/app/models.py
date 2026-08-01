@@ -62,6 +62,7 @@ class Project(Base):
     title: Mapped[str] = mapped_column(String, default="Untitled")
     owner: Mapped[str] = mapped_column(String, default="")
     brief_text: Mapped[str] = mapped_column(Text, default="")
+    logline: Mapped[str] = mapped_column(Text, default="")
     stage: Mapped[Stage] = mapped_column(Enum(Stage), default=Stage.idea)
     status: Mapped[Status] = mapped_column(Enum(Status), default=Status.draft)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

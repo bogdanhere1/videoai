@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     s3_bucket: str = "assets"
 
     gemini_api_key: str = ""
+    # Новые ключи (AQ.…) не видят gemini-2.5-*; рабочий дефолт — flash-lite.
+    gemini_model: str = "gemini-3.1-flash-lite"
 
     # native | segmind | fal | eachlabs
     video_provider: str = "native"
