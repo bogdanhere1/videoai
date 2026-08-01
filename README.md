@@ -49,5 +49,28 @@ docker compose up -d
 # minio: http://localhost:9001
 ```
 
-Docker локально пока не установлен — для деплоя ставится на VPS (Beget).
-Для локальной разработки без Docker можно поднимать `api/` (uvicorn) и `web/` (vite) напрямую.
+## Локальный запуск без Docker (SQLite)
+
+Для итерации на своей машине Postgres не обязателен — можно на SQLite.
+
+**Бэкенд** (нужен Python 3.12):
+```bash
+cd api
+python -m venv .venv
+.venv\Scripts\activate            # Windows
+pip install -r requirements.txt
+set DATABASE_URL=sqlite:///./dev.db
+set GEMINI_API_KEY=AQ.твой-ключ
+set ELEVENLABS_API_KEY=твой-ключ
+uvicorn app.main:app --reload      # http://localhost:8000/health
+```
+
+**Фронтенд** (Node 22+):
+```bash
+cd web
+npm install
+npm run dev                         # http://localhost:5173  (проксирует /api → :8000)
+```
+
+Открыть `http://localhost:5173`, создать ролик → вписать/наговорить идею → сгенерировать
+сценарий → согласовать сцены. GEMINI_MODEL по умолчанию `gemini-3.1-flash-lite`.
