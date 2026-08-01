@@ -1,0 +1,20 @@
+# Доступ по секретной ссылке / basic-auth (Фаза 0).
+# Полноценные роли ты/клиент — на Фазе 6.
+#
+# Замени :80 на свой домен для авто-HTTPS, например: studio.example.com
+:80 {
+	# API
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	# Фронтенд
+	handle {
+		reverse_proxy web:5173
+	}
+
+	# Пример basic-auth (сгенерировать хэш: `caddy hash-password`):
+	# basic_auth {
+	#     bogdan JDJhJDE0J...   # bcrypt hash
+	# }
+}

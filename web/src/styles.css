@@ -1,0 +1,13 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
+.app { display: flex; flex-direction: column; height: 100vh; }
+header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 20px; border-bottom: 1px solid #1e293b;
+}
+header h1 { font-size: 18px; margin: 0; }
+.badge {
+  font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  background: #1e293b; color: #94a3b8;
+}
+.canvas { flex: 1; }
