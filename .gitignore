@@ -22,6 +22,8 @@ pgdata/
 minio-data/
 caddy-data/
 *.sqlite3
+*.db
+dev.db
 
 # OS / editor
 .DS_Store
