@@ -21,10 +21,18 @@ class Settings(BaseSettings):
 
     # native | segmind | fal | eachlabs
     video_provider: str = "native"
+    # Формат ключа higgsfield-client: "key:secret" (заголовок Authorization: Key ...)
     higgsfield_api_key: str = ""
-    higgsfield_base_url: str = "https://cloud.higgsfield.ai"
+    higgsfield_base_url: str = "https://platform.higgsfield.ai"
+    # application = путь эндпоинта модели
+    soul_application: str = "/v1/text2image/soul"
+    dop_application: str = "/v1/image2video/dop"
+    speak_application: str = "/v1/speak/speak"
 
     elevenlabs_api_key: str = ""
+
+    # Локальное хранилище ассетов (URL Higgsfield живёт 1 час → скачиваем к себе)
+    media_dir: str = "./media"
 
 
 settings = Settings()

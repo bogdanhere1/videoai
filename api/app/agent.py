@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 
 from .config import settings
-from .schemas import ScriptDraft
+from .schemas import ScriptDraft, VisualList
 
 _SYSTEM = (
     "Ты — сценарист AI-видеостудии. По идее пользователя строишь чёткий, "
@@ -46,6 +46,32 @@ def _generate(prompt: str) -> ScriptDraft:
 
 def generate_script(brief: str) -> ScriptDraft:
     return _generate(f"Идея ролика:\n{brief}\n\nСоставь сценарий.")
+
+
+_ART_SYSTEM = (
+    "Ты — арт-директор AI-видеостудии. По сценарию выделяешь визуальные сущности: "
+    "персонажей (character) и локации/окружения (environment). Для каждой даёшь "
+    "детальный промпт для генератора изображений НА АНГЛИЙСКОМ (стиль, свет, композиция, "
+    "материалы, настроение), а поле name — на языке сценария. Не выдумывай лишних сущностей."
+)
+
+
+def extract_visuals(brief: str, script_text: str) -> VisualList:
+    client = _client()
+    resp = client.models.generate_content(
+        model=settings.gemini_model,
+        contents=f"Идея:\n{brief}\n\nСценарий:\n{script_text}\n\nВыдели персонажей и окружения.",
+        config=types.GenerateContentConfig(
+            system_instruction=_ART_SYSTEM,
+            response_mime_type="application/json",
+            response_schema=VisualList,
+            temperature=0.7,
+        ),
+    )
+    parsed = getattr(resp, "parsed", None)
+    if isinstance(parsed, VisualList):
+        return parsed
+    return VisualList.model_validate_json(resp.text)
 
 
 def revise_script(brief: str, previous: ScriptDraft, feedback: str) -> ScriptDraft:

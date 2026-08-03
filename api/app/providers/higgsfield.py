@@ -1,54 +1,57 @@
-"""Нативный провайдер Higgsfield.
+"""Нативный провайдер Higgsfield через официальный SDK (higgsfield-client).
 
-ЗАГЛУШКА Фазы 0. Точные пути/поля подтверждаем чек-листом по cloud.higgsfield.ai
-(см. README, Трек A). Структура запроса — единый POST /v1/generations с Bearer.
-Пока доступ к API не подтверждён, методы бросают NotImplementedError, но
-сигнатуры и слой абстракции уже на месте.
+Auth: SyncClient шлёт заголовок `Authorization: Key <api_key>`; ключ формата
+"key:secret". application — путь эндпоинта (/v1/text2image/soul и т.д.).
+subscribe() блокирующе поллит до Completed и возвращает финальный JSON.
+
+Точная схема arguments/результата подтверждается пробником scripts/probe_higgsfield.py
+на реальном ключе — при расхождении правится только этот файл.
 """
-import httpx
+from higgsfield_client import SyncClient
 
 from ..config import settings
-from .base import JobHandle, JobResult, VideoProvider
+from .base import GenResult, VideoProvider
+
+
+def extract_url(result) -> str | None:
+    """Достаёт URL сгенерированного ассета из ответа (форма уточняется пробником)."""
+    if not isinstance(result, dict):
+        return None
+    for key in ("images", "videos", "outputs", "results"):
+        items = result.get(key)
+        if isinstance(items, list) and items:
+            first = items[0]
+            if isinstance(first, dict):
+                return first.get("url") or first.get("uri")
+            if isinstance(first, str):
+                return first
+    return result.get("url") or result.get("result_url")
 
 
 class HiggsfieldProvider(VideoProvider):
     name = "higgsfield"
 
     def __init__(self) -> None:
-        self._client = httpx.Client(
+        self._client = SyncClient(
             base_url=settings.higgsfield_base_url,
-            headers={"Authorization": f"Bearer {settings.higgsfield_api_key}"},
-            timeout=60,
+            api_key=(settings.higgsfield_api_key or None),
         )
 
-    def _create(self, payload: dict) -> JobHandle:
-        # TODO: подтвердить путь и схему по чек-листу Трека A
-        resp = self._client.post("/v1/generations", json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        return JobHandle(external_job_id=data.get("id", ""), raw=data)
+    def generate_image(self, prompt: str, *, soul_id: str | None = None, **kwargs) -> GenResult:
+        args = {"prompt": prompt, **kwargs}
+        if soul_id:
+            args["soul_id"] = soul_id
+        result = self._client.subscribe(settings.soul_application, args)
+        return GenResult(url=extract_url(result), raw=result)
 
-    def text_to_image(self, prompt: str, **kwargs) -> JobHandle:
-        return self._create({"task": "text-to-image", "prompt": prompt, **kwargs})
-
-    def image_to_video(self, image_url, prompt, camera=None, **kwargs) -> JobHandle:
-        payload = {"task": "image-to-video", "image_url": image_url, "prompt": prompt}
+    def image_to_video(self, image_url, prompt, *, camera=None, **kwargs) -> GenResult:
+        args = {"input_image_url": image_url, "prompt": prompt, **kwargs}
         if camera:
-            payload["camera"] = camera        # пресет движения + сила
-        payload.update(kwargs)
-        return self._create(payload)
+            args.update(camera)
+        result = self._client.subscribe(settings.dop_application, args)
+        return GenResult(url=extract_url(result), raw=result)
 
-    def lipsync(self, image_url, audio_url, **kwargs) -> JobHandle:
-        return self._create({
-            "task": "speak", "image_url": image_url, "audio_url": audio_url, **kwargs,
-        })
-
-    def poll_job(self, external_job_id: str) -> JobResult:
-        resp = self._client.get(f"/v1/generations/{external_job_id}")
-        resp.raise_for_status()
-        data = resp.json()
-        return JobResult(
-            status=data.get("status", "running"),
-            result_url=data.get("result_url"),
-            raw=data,
-        )
+    def lipsync(self, image_url, audio_url, **kwargs) -> GenResult:
+        args = {"input_image_url": image_url, "audio_url": audio_url, **kwargs}
+        result = self._client.subscribe(settings.speak_application, args)
+        return GenResult(url=extract_url(result), raw=result)

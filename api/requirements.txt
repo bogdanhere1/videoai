@@ -10,3 +10,4 @@ httpx==0.28.1
 python-multipart==0.0.19
 boto3==1.35.71
 google-genai==1.47.0
+higgsfield-client==0.1.0
