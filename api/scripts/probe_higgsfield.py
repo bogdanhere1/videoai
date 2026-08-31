@@ -9,6 +9,11 @@
 import json
 import sys
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # Windows-консоль по умолчанию cp1251
+except Exception:
+    pass
+
 from app.config import settings
 from higgsfield_client import SyncClient
 
@@ -24,14 +29,20 @@ def main() -> int:
     print(f"[i] application = {settings.soul_application}")
 
     client = SyncClient(base_url=settings.higgsfield_base_url, api_key=key)
-    args = {"prompt": "a cozy coffee cup on a wooden table, morning light, photorealistic"}
+    args = {"params": {
+        "prompt": "a cozy coffee cup on a wooden table, morning light, photorealistic",
+        "width_and_height": "1536x1536",
+        "quality": "1080p",
+        "batch_size": 1,
+        "seed": 42,
+    }}
     print(f"[>] subscribe({settings.soul_application!r}, {args})")
 
     try:
         result = client.subscribe(settings.soul_application, args)
     except Exception as e:
         print(f"[x] ОШИБКА вызова: {type(e).__name__}: {e}")
-        print("    → вероятно неверный путь application, схема arguments или формат ключа.")
+        print("    -> вероятно неверный формат ключа (нужен key:secret), путь application или схема arguments.")
         return 2
 
     print("[✓] Готово. Ключи ответа:", list(result.keys()) if isinstance(result, dict) else type(result))

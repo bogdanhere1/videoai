@@ -37,21 +37,43 @@ class HiggsfieldProvider(VideoProvider):
             api_key=(settings.higgsfield_api_key or None),
         )
 
-    def generate_image(self, prompt: str, *, soul_id: str | None = None, **kwargs) -> GenResult:
-        args = {"prompt": prompt, **kwargs}
+    def generate_image(
+        self,
+        prompt: str,
+        *,
+        soul_id: str | None = None,
+        width_and_height: str = "1536x1536",
+        quality: str = "1080p",
+        batch_size: int = 1,
+        seed: int | None = None,
+        **kwargs,
+    ) -> GenResult:
+        # Подтверждённая схема Soul: тело = {"params": {...}}, width_and_height обязателен.
+        params = {
+            "prompt": prompt,
+            "width_and_height": width_and_height,
+            "quality": quality,
+            "batch_size": batch_size,
+        }
+        if seed is not None:
+            params["seed"] = seed
         if soul_id:
-            args["soul_id"] = soul_id
-        result = self._client.subscribe(settings.soul_application, args)
+            params["soul_id"] = soul_id  # точное имя поля Soul ID уточним при обучении лица
+        params.update(kwargs)
+        result = self._client.subscribe(settings.soul_application, {"params": params})
         return GenResult(url=extract_url(result), raw=result)
 
     def image_to_video(self, image_url, prompt, *, camera=None, **kwargs) -> GenResult:
-        args = {"input_image_url": image_url, "prompt": prompt, **kwargs}
+        # Схема DoP уточняется на Фазе 4 (та же обёртка params).
+        params = {"input_image_url": image_url, "prompt": prompt}
         if camera:
-            args.update(camera)
-        result = self._client.subscribe(settings.dop_application, args)
+            params.update(camera)
+        params.update(kwargs)
+        result = self._client.subscribe(settings.dop_application, {"params": params})
         return GenResult(url=extract_url(result), raw=result)
 
     def lipsync(self, image_url, audio_url, **kwargs) -> GenResult:
-        args = {"input_image_url": image_url, "audio_url": audio_url, **kwargs}
-        result = self._client.subscribe(settings.speak_application, args)
+        # Схема Speak уточняется на Фазе 4.
+        params = {"input_image_url": image_url, "audio_url": audio_url, **kwargs}
+        result = self._client.subscribe(settings.speak_application, {"params": params})
         return GenResult(url=extract_url(result), raw=result)
