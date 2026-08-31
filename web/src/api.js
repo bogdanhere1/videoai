@@ -23,6 +23,16 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ feedback }),
     }).then(j),
+  extractVisuals: (id) =>
+    fetch(`/api/projects/${id}/visuals:extract`, { method: "POST" }).then(j),
+  generateConcept: (assetId) =>
+    fetch(`/api/concepts/${assetId}:generate`, { method: "POST" }).then(j),
+  decideAsset: (assetId, decision, note = "") =>
+    fetch(`/api/assets/${assetId}/${decision}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note }),
+    }).then(j),
   decideScene: (sceneId, decision, note = "") =>
     fetch(`/api/scenes/${sceneId}/${decision}`, {
       method: "POST",

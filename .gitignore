@@ -21,6 +21,7 @@ dist/
 pgdata/
 minio-data/
 caddy-data/
+media/
 *.sqlite3
 *.db
 dev.db

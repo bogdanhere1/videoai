@@ -101,6 +101,15 @@ function Project({ project, onChange, afterChange }) {
     await api.decideScene(sceneId, d);
     return api.getProject(project.id);
   });
+  const extractVisuals = () => run("visuals", () => api.extractVisuals(project.id));
+  const genConcept = (assetId) => run("concept:" + assetId, async () => {
+    await api.generateConcept(assetId);
+    return api.getProject(project.id);
+  });
+  const decideConcept = (assetId, d) => run("concept", async () => {
+    await api.decideAsset(assetId, d);
+    return api.getProject(project.id);
+  });
 
   const toggleRec = async () => {
     if (rec) { mediaRef.current?.stop(); return; }
@@ -168,6 +177,48 @@ function Project({ project, onChange, afterChange }) {
               placeholder="Правки ко всему сценарию (напр. «сделай динамичнее, убери сцену 3»)…" />
             <button disabled={!feedback.trim() || busy} onClick={revise}>Внести правки</button>
           </div>
+        )}
+      </section>
+
+      <section>
+        <h2>3 · Визуал-стиль</h2>
+        {project.concepts.length === 0 ? (
+          <button className="primary" disabled={!project.scenes.length || busy} onClick={extractVisuals}>
+            {busy === "visuals" ? "Извлекаю…" : "Извлечь визуалы из сценария"}
+          </button>
+        ) : (
+          <>
+            <button disabled={busy} onClick={extractVisuals}>
+              {busy === "visuals" ? "…" : "↻ Пересобрать визуалы"}
+            </button>
+            <div className="concepts">
+              {project.concepts.map((c) => (
+                <div key={c.id} className={`concept ${c.approved ? "approved" : ""}`}>
+                  <div className="concept-media">
+                    {c.url ? <img src={c.url} alt={c.name} /> : <div className="ph">нет картинки</div>}
+                    <span className={`kind ${c.kind}`}>
+                      {c.kind === "character" ? "персонаж" : "окружение"}
+                    </span>
+                  </div>
+                  <div className="concept-body">
+                    <b>{c.name}</b>
+                    <p className="cprompt">{c.prompt}</p>
+                    <div className="row">
+                      <button disabled={busy} onClick={() => genConcept(c.id)}>
+                        {busy === "concept:" + c.id ? "Генерирую…" : c.url ? "↻ Перегенерировать" : "Сгенерировать"}
+                      </button>
+                      {c.url && (
+                        <>
+                          <button onClick={() => decideConcept(c.id, "approve")}>✓</button>
+                          <button onClick={() => decideConcept(c.id, "reject")}>✕</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </section>
     </div>
