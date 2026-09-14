@@ -263,7 +263,13 @@ def gen_voice(shot_id: str, db: Session = Depends(get_db)):
     text = g.get("voice_text", "").strip()
     if not text:
         raise HTTPException(400, "Пустой текст озвучки")
-    voice_id = g.get("voice_id") or "21m00Tcm4TlvDq8ikWAM"
+    voice_id = g.get("voice_id")
+    if not voice_id:
+        try:
+            vs = el.list_voices()
+            voice_id = vs[0]["voice_id"] if vs else "21m00Tcm4TlvDq8ikWAM"
+        except Exception:
+            voice_id = "21m00Tcm4TlvDq8ikWAM"
     try:
         audio = el.tts(text, voice_id)
     except Exception as e:
