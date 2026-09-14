@@ -110,6 +110,16 @@ function Project({ project, onChange, afterChange }) {
     await api.decideAsset(assetId, d);
     return api.getProject(project.id);
   });
+  const genStoryboard = () => run("storyboard", () => api.generateStoryboard(project.id));
+  const genFrame = (shotId) => run("frame:" + shotId, async () => {
+    await api.generateFrame(shotId);
+    return api.getProject(project.id);
+  });
+  const decideShot = (shotId, d) => run("shot", async () => {
+    await api.decideShot(shotId, d);
+    return api.getProject(project.id);
+  });
+  const shotsCount = project.scenes.reduce((n, s) => n + (s.shots?.length || 0), 0);
 
   const toggleRec = async () => {
     if (rec) { mediaRef.current?.stop(); return; }
@@ -218,6 +228,50 @@ function Project({ project, onChange, afterChange }) {
                 </div>
               ))}
             </div>
+          </>
+        )}
+      </section>
+
+      <section>
+        <h2>4 · Раскадровка</h2>
+        {shotsCount === 0 ? (
+          <button className="primary" disabled={!project.scenes.length || busy} onClick={genStoryboard}>
+            {busy === "storyboard" ? "Раскадровываю…" : "Сделать раскадровку"}
+          </button>
+        ) : (
+          <>
+            <button disabled={busy} onClick={genStoryboard}>
+              {busy === "storyboard" ? "…" : "↻ Пересобрать раскадровку"}
+            </button>
+            {project.scenes.map((sc) => (
+              <div key={sc.id} className="sb-scene">
+                {sc.shots?.length > 0 && <div className="sb-scene-title">Сцена {sc.order}</div>}
+                <div className="shots">
+                  {(sc.shots || []).map((sh) => (
+                    <div key={sh.id} className={`shot ${sh.status}`}>
+                      <div className="shot-media">
+                        {sh.frame_url ? <img src={sh.frame_url} alt="" /> : <div className="ph">кадр не сгенерирован</div>}
+                        <span className="dur">{sh.duration}с</span>
+                      </div>
+                      <div className="shot-body">
+                        <p className="shot-desc">{sh.description}</p>
+                        <div className="shot-meta">
+                          <span>🎥 {sh.camera}</span>
+                          <span>💡 {sh.lighting}</span>
+                        </div>
+                        <div className="row">
+                          <button disabled={busy} onClick={() => genFrame(sh.id)}>
+                            {busy === "frame:" + sh.id ? "…" : sh.frame_url ? "↻ Кадр" : "Кадр"}
+                          </button>
+                          <button onClick={() => decideShot(sh.id, "approve")}>✓</button>
+                          <button onClick={() => decideShot(sh.id, "reject")}>✕</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </>
         )}
       </section>

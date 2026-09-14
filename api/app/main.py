@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from . import agent, storage
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Approval, Asset, AssetType, Project, Scene, Stage, Status
+from .models import Approval, Asset, AssetType, Project, Scene, Shot, Stage, Status
 from .providers import get_video_provider
 from .providers.elevenlabs import transcribe as stt_transcribe
 from .schemas import ApprovalIn, IdeaIn, ScriptDraft, ScriptReviseIn, TranscriptOut
@@ -155,6 +155,71 @@ def generate_concept(asset_id: str, db: Session = Depends(get_db)):
     return _asset_dto(asset)
 
 
+# ---------- Стадия 4: раскадровка ----------
+@app.post("/api/projects/{project_id}/storyboard:generate")
+def generate_storyboard(project_id: str, db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    scenes = sorted(project.scenes, key=lambda x: x.order)
+    if not scenes:
+        raise HTTPException(400, "Сначала сгенерируй сценарий.")
+    script_text = "\n\n".join(f"Сцена {s.order}: {s.script_text}" for s in scenes)
+    concepts = db.query(Asset).filter(
+        Asset.project_id == project_id, Asset.type == AssetType.concept
+    ).all()
+    visuals = "\n".join(
+        f"- {(c.params_json or {}).get('kind')} «{(c.params_json or {}).get('name')}»: "
+        f"{(c.params_json or {}).get('prompt', '')}" for c in concepts
+    ) or "(визуалы ещё не заданы)"
+    try:
+        board = agent.breakdown_storyboard(project.brief_text, script_text, visuals)
+    except Exception as e:
+        raise HTTPException(502, f"Gemini error: {e}")
+    by_order = {s.order: s for s in scenes}
+    for s in scenes:
+        db.query(Shot).filter(Shot.scene_id == s.id).delete()
+    for sp in board.shots:
+        scene = by_order.get(sp.scene_order, scenes[0])
+        db.add(Shot(
+            scene_id=scene.id, order=sp.order, description=sp.description,
+            duration=sp.duration, lighting_prompt=sp.lighting,
+            camera_json={"movement": sp.camera, "frame_prompt": sp.frame_prompt},
+            status=Status.review,
+        ))
+    project.stage = Stage.storyboard
+    project.status = Status.review
+    db.commit()
+    return _project_dto(project, db)
+
+
+@app.post("/api/shots/{shot_id}:frame")
+def generate_frame(shot_id: str, db: Session = Depends(get_db)):
+    shot = db.get(Shot, shot_id)
+    if not shot:
+        raise HTTPException(404, "Шот не найден")
+    prompt = (shot.camera_json or {}).get("frame_prompt") or shot.description
+    try:
+        res = get_video_provider().generate_image(prompt)
+    except Exception as e:
+        raise HTTPException(502, f"Higgsfield error: {e}")
+    if not res.url:
+        raise HTTPException(502, "Провайдер не вернул URL кадра")
+    try:
+        stored = storage.save_from_url(res.url)
+    except Exception as e:
+        raise HTTPException(502, f"Не удалось скачать кадр: {e}")
+    frame = (
+        db.query(Asset).filter(Asset.shot_id == shot_id, Asset.type == AssetType.frame).first()
+    )
+    if frame:
+        frame.url = stored
+        frame.version += 1
+        frame.approved = False
+    else:
+        db.add(Asset(shot_id=shot_id, type=AssetType.frame, url=stored, source="higgsfield"))
+    db.commit()
+    return _shot_dto(db, shot)
+
+
 # ---------- Gate-подтверждения ----------
 @app.post("/api/scenes/{scene_id}/approve")
 def approve_scene(scene_id: str, body: ApprovalIn, db: Session = Depends(get_db)):
@@ -174,6 +239,16 @@ def approve_asset(asset_id: str, body: ApprovalIn, db: Session = Depends(get_db)
 @app.post("/api/assets/{asset_id}/reject")
 def reject_asset(asset_id: str, body: ApprovalIn, db: Session = Depends(get_db)):
     return _decide_asset(db, asset_id, False, body)
+
+
+@app.post("/api/shots/{shot_id}/approve")
+def approve_shot(shot_id: str, body: ApprovalIn, db: Session = Depends(get_db)):
+    return _decide_shot(db, shot_id, Status.approved, body)
+
+
+@app.post("/api/shots/{shot_id}/reject")
+def reject_shot(shot_id: str, body: ApprovalIn, db: Session = Depends(get_db)):
+    return _decide_shot(db, shot_id, Status.rejected, body)
 
 
 # ---------- helpers ----------
@@ -232,6 +307,29 @@ def _decide_asset(db: Session, asset_id: str, approved: bool, body: ApprovalIn):
     return _asset_dto(asset)
 
 
+def _decide_shot(db: Session, shot_id: str, decision: Status, body: ApprovalIn):
+    shot = db.get(Shot, shot_id)
+    if not shot:
+        raise HTTPException(404, "Шот не найден")
+    shot.status = decision
+    db.add(Approval(target_type="shot", target_id=shot_id,
+                    decision=decision.value, note=body.note, actor=body.actor))
+    db.commit()
+    return _shot_dto(db, shot)
+
+
+def _shot_dto(db: Session, s: Shot) -> dict:
+    frame = db.query(Asset).filter(Asset.shot_id == s.id, Asset.type == AssetType.frame).first()
+    cam = s.camera_json or {}
+    return {
+        "id": s.id, "order": s.order, "description": s.description,
+        "camera": cam.get("movement", ""), "lighting": s.lighting_prompt,
+        "duration": s.duration, "status": s.status,
+        "frame_url": frame.url if frame else "",
+        "frame_version": frame.version if frame else 0,
+    }
+
+
 def _asset_dto(a: Asset) -> dict:
     p = a.params_json or {}
     return {
@@ -248,7 +346,10 @@ def _project_dto(p: Project, db: Session) -> dict:
         "id": p.id, "title": p.title, "stage": p.stage, "status": p.status,
         "brief_text": p.brief_text, "logline": p.logline,
         "scenes": [
-            {"id": s.id, "order": s.order, "script_text": s.script_text, "status": s.status}
+            {
+                "id": s.id, "order": s.order, "script_text": s.script_text, "status": s.status,
+                "shots": [_shot_dto(db, sh) for sh in sorted(s.shots, key=lambda x: x.order)],
+            }
             for s in sorted(p.scenes, key=lambda x: x.order)
         ],
         "concepts": [_asset_dto(a) for a in concepts],

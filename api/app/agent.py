@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 
 from .config import settings
-from .schemas import ScriptDraft, VisualList
+from .schemas import ScriptDraft, Storyboard, VisualList
 
 _SYSTEM = (
     "Ты — сценарист AI-видеостудии. По идее пользователя строишь чёткий, "
@@ -72,6 +72,35 @@ def extract_visuals(brief: str, script_text: str) -> VisualList:
     if isinstance(parsed, VisualList):
         return parsed
     return VisualList.model_validate_json(resp.text)
+
+
+_SHOT_SYSTEM = (
+    "Ты — режиссёр раскадровки AI-видеостудии. По сценарию и утверждённым визуалам разбиваешь "
+    "каждую сцену на шоты (планы). Для каждого шота: что в кадре, движение камеры, свет, "
+    "длительность в секундах и детальный англоязычный промпт ключевого кадра. Ролик короткий — "
+    "1–3 шота на сцену. scene_order ссылается на номер сцены из сценария."
+)
+
+
+def breakdown_storyboard(brief: str, script_text: str, visuals_summary: str) -> Storyboard:
+    client = _client()
+    resp = client.models.generate_content(
+        model=settings.gemini_model,
+        contents=(
+            f"Идея:\n{brief}\n\nСценарий (по сценам):\n{script_text}\n\n"
+            f"Утверждённые визуалы:\n{visuals_summary}\n\nРазбей на шоты."
+        ),
+        config=types.GenerateContentConfig(
+            system_instruction=_SHOT_SYSTEM,
+            response_mime_type="application/json",
+            response_schema=Storyboard,
+            temperature=0.7,
+        ),
+    )
+    parsed = getattr(resp, "parsed", None)
+    if isinstance(parsed, Storyboard):
+        return parsed
+    return Storyboard.model_validate_json(resp.text)
 
 
 def revise_script(brief: str, previous: ScriptDraft, feedback: str) -> ScriptDraft:

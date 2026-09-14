@@ -26,6 +26,21 @@ class VisualList(BaseModel):
     items: list[VisualSpec]
 
 
+# ---- Раскадровка (Фаза 3) ----
+class ShotSpec(BaseModel):
+    scene_order: int = Field(description="Номер сцены, к которой относится шот")
+    order: int = Field(description="Порядок шота внутри сцены, с 1")
+    description: str = Field(description="Что в кадре: действие, кто, ракурс — на языке сценария")
+    camera: str = Field(description="Движение/раскадровка камеры, напр. 'slow dolly in', 'handheld'")
+    lighting: str = Field(description="Свет: источник и настроение")
+    duration: float = Field(description="Длительность шота в секундах, 2–8")
+    frame_prompt: str = Field(description="Детальный промпт ключевого кадра НА АНГЛИЙСКОМ (для Soul)")
+
+
+class Storyboard(BaseModel):
+    shots: list[ShotSpec]
+
+
 # ---- API request/response ----
 class IdeaIn(BaseModel):
     text: str
