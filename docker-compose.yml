@@ -47,7 +47,19 @@ services:
       - minio-data:/data
     ports: ["9000:9000", "9001:9001"]
 
+  # Kitsu — ревью с клиентом. Образ cgwire/cgwire = Kitsu UI + Zou API (all-in-one).
+  # ВНИМАНИЕ: этот образ для теста; для прод-нагрузки — полный Zou-сетап.
+  kitsu:
+    image: cgwire/cgwire:latest
+    volumes:
+      - kitsu-data:/opt/zou/previews
+      - kitsu-db:/var/lib/postgresql
+    ports: ["8081:80"]
+    restart: unless-stopped
+
 volumes:
   caddy-data:
   pgdata:
   minio-data:
+  kitsu-data:
+  kitsu-db:

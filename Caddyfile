@@ -1,20 +1,32 @@
-# Доступ по секретной ссылке / basic-auth (Фаза 0).
-# Полноценные роли ты/клиент — на Фазе 6.
+# Доступ по логину/паролю (basic-auth) ко всей студии. Фаза 6.
 #
-# Замени :80 на свой домен для авто-HTTPS, например: studio.example.com
+# 1) Замени :80 на свой домен для авто-HTTPS:  studio.example.com {
+# 2) Сгенерируй хэш пароля:  docker run --rm caddy caddy hash-password --plaintext 'ТВОЙ_ПАРОЛЬ'
+# 3) Вставь логин и хэш в блок basic_auth ниже и раскомментируй его.
+#
+# «Доступ только по ссылке» = дать клиенту URL + один логин/пароль.
+
 :80 {
-	# API
+	encode gzip
+
+	# --- Логин/пароль на весь сайт (раскомментировать после шага 2) ---
+	# basic_auth {
+	#     bogdan JDJhJDE0J...ХЭШ...
+	# }
+
 	handle /api/* {
 		reverse_proxy api:8000
 	}
+	handle /media/* {
+		reverse_proxy api:8000
+	}
 
-	# Фронтенд
+	# Kitsu — ревью с клиентом (Фаза 6, поддомен предпочтительнее)
+	# handle /kitsu/* {
+	#     reverse_proxy kitsu:80
+	# }
+
 	handle {
 		reverse_proxy web:5173
 	}
-
-	# Пример basic-auth (сгенерировать хэш: `caddy hash-password`):
-	# basic_auth {
-	#     bogdan JDJhJDE0J...   # bcrypt hash
-	# }
 }

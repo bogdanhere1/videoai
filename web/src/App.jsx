@@ -154,7 +154,10 @@ function Project({ project, onChange, afterChange }) {
 
   return (
     <div className="project">
-      <StageBar stage={project.stage} />
+      <div className="topline">
+        <StageBar stage={project.stage} />
+        <span className="cost">≈ ${project.cost_usd ?? 0} · API</span>
+      </div>
 
       <section>
         <h2>1 · Идея</h2>

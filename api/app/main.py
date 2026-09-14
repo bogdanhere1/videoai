@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 from . import agent, assembly, storage
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Approval, Asset, AssetType, Project, Scene, Shot, Stage, Status
+from .models import (
+    Approval, Asset, AssetType, Job, JobStatus, Project, Scene, Shot, Stage, Status,
+)
 from .presets import CAMERA_PRESETS
 from .providers import elevenlabs as el
 from .providers import get_video_provider
@@ -152,6 +154,7 @@ def generate_concept(asset_id: str, db: Session = Depends(get_db)):
     asset.version += 1
     asset.source = "higgsfield"
     asset.approved = False
+    _log_usage(db, asset.project_id, "concept", "higgsfield", COST_USD["concept"])
     db.commit()
     return _asset_dto(asset)
 
@@ -217,6 +220,7 @@ def generate_frame(shot_id: str, db: Session = Depends(get_db)):
         frame.approved = False
     else:
         db.add(Asset(shot_id=shot_id, type=AssetType.frame, url=stored, source="higgsfield"))
+    _log_usage(db, _shot_project_id(shot), "frame", "higgsfield", COST_USD["frame"])
     db.commit()
     return _shot_dto(db, shot)
 
@@ -265,6 +269,7 @@ def gen_voice(shot_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(502, f"ElevenLabs TTS error: {e}")
     _save_shot_asset(db, shot_id, AssetType.voice, storage.save_bytes(audio, ".mp3"), "elevenlabs")
+    _log_usage(db, _shot_project_id(shot), "voice", "elevenlabs", COST_USD["voice"])
     db.commit()
     return _shot_dto(db, shot)
 
@@ -280,6 +285,7 @@ def gen_sfx(shot_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(502, f"ElevenLabs SFX error: {e}")
     _save_shot_asset(db, shot_id, AssetType.sfx, storage.save_bytes(audio, ".mp3"), "elevenlabs")
+    _log_usage(db, _shot_project_id(shot), "sfx", "elevenlabs", COST_USD["sfx"])
     db.commit()
     return _shot_dto(db, shot)
 
@@ -295,6 +301,7 @@ def gen_music(shot_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(502, f"ElevenLabs music error: {e}")
     _save_shot_asset(db, shot_id, AssetType.music, storage.save_bytes(audio, ".mp3"), "elevenlabs")
+    _log_usage(db, _shot_project_id(shot), "music", "elevenlabs", COST_USD["music"])
     db.commit()
     return _shot_dto(db, shot)
 
@@ -316,6 +323,8 @@ def gen_video(shot_id: str, db: Session = Depends(get_db)):
     if not res.url:
         raise HTTPException(502, "Провайдер не вернул URL видео")
     _save_shot_asset(db, shot_id, AssetType.video, storage.save_from_url(res.url, ".mp4"), "higgsfield")
+    _log_usage(db, _shot_project_id(shot), "video", "higgsfield",
+               COST_USD["video_per_sec"] * (shot.duration or 5))
     db.commit()
     return _shot_dto(db, shot)
 
@@ -336,6 +345,7 @@ def gen_lipsync(shot_id: str, db: Session = Depends(get_db)):
     if not res.url:
         raise HTTPException(502, "Провайдер не вернул URL липсинка")
     _save_shot_asset(db, shot_id, AssetType.video, storage.save_from_url(res.url, ".mp4"), "higgsfield")
+    _log_usage(db, _shot_project_id(shot), "lipsync", "higgsfield", COST_USD["lipsync"])
     db.commit()
     return _shot_dto(db, shot)
 
@@ -501,6 +511,29 @@ def _media_fs_path(url: str) -> str:
     return os.path.join(settings.media_dir, name)
 
 
+# Ориентировочная стоимость генераций (USD) — для счётчика расходов.
+COST_USD = {"concept": 0.05, "frame": 0.05, "voice": 0.01, "sfx": 0.01,
+            "music": 0.02, "video_per_sec": 0.10, "lipsync": 0.10}
+
+
+def _log_usage(db: Session, project_id: str | None, kind: str, provider: str, cost: float) -> None:
+    db.add(Job(provider=provider, status=JobStatus.done,
+               payload={"project_id": project_id, "kind": kind, "cost": round(cost, 4)}))
+
+
+def _project_cost(db: Session, project_id: str) -> float:
+    total = 0.0
+    for j in db.query(Job).filter(Job.status == JobStatus.done).all():
+        p = j.payload or {}
+        if p.get("project_id") == project_id:
+            total += float(p.get("cost", 0) or 0)
+    return round(total, 2)
+
+
+def _shot_project_id(shot: Shot) -> str | None:
+    return shot.scene.project_id if shot.scene else None
+
+
 def _shot_dto(db: Session, s: Shot) -> dict:
     g = s.graph_json or {}
     cam = s.camera_json or {}
@@ -541,6 +574,7 @@ def _project_dto(p: Project, db: Session) -> dict:
     return {
         "id": p.id, "title": p.title, "stage": p.stage, "status": p.status,
         "final_url": final.url if final else "",
+        "cost_usd": _project_cost(db, p.id),
         "brief_text": p.brief_text, "logline": p.logline,
         "scenes": [
             {
