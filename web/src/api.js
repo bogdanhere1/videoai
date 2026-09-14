@@ -23,6 +23,16 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ feedback }),
     }).then(j),
+  getVoices: () => fetch("/api/voices").then(j),
+  getCameraPresets: () => fetch("/api/camera-presets").then(j),
+  patchShot: (shotId, patch) =>
+    fetch(`/api/shots/${shotId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then(j),
+  genShotElement: (shotId, element) =>
+    fetch(`/api/shots/${shotId}/${element}:generate`, { method: "POST" }).then(j),
   generateStoryboard: (id) =>
     fetch(`/api/projects/${id}/storyboard:generate`, { method: "POST" }).then(j),
   generateFrame: (shotId) =>

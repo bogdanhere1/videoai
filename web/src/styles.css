@@ -82,3 +82,13 @@ main { flex: 1; overflow-y: auto; padding: 24px; }
 .shot-body { padding: 10px 12px 12px; }
 .shot-desc { font-size: 13px; margin: 0 0 8px; }
 .shot-meta { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: #94a3b8; margin-bottom: 10px; }
+
+.editor { border-top: 1px solid #1e293b; padding: 12px; background: #0d1424; }
+.el-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 12px; }
+.el { display: flex; flex-direction: column; gap: 6px; }
+.el label { font-size: 11.5px; color: #94a3b8; margin-top: 4px; }
+.el select, .el input[type="text"], .el input:not([type]) { font: inherit; padding: 6px 8px; border-radius: 7px; background: #0b1120; color: #e2e8f0; border: 1px solid #334155; }
+.el input[type="range"] { accent-color: #6366f1; }
+.el audio, .el video { width: 100%; margin-top: 6px; border-radius: 7px; }
+.el video { aspect-ratio: 16/9; background: #000; }
+.el .hint { font-size: 11px; color: #64748b; margin: 4px 0 0; line-height: 1.4; }

@@ -41,6 +41,17 @@ class Storyboard(BaseModel):
     shots: list[ShotSpec]
 
 
+# ---- Шот-эдитор (Фаза 4) ----
+class ShotPatch(BaseModel):
+    lighting: str | None = None
+    camera_preset: str | None = None
+    motion_strength: float | None = None
+    voice_text: str | None = None
+    voice_id: str | None = None
+    music_prompt: str | None = None
+    sfx_prompt: str | None = None
+
+
 # ---- API request/response ----
 class IdeaIn(BaseModel):
     text: str

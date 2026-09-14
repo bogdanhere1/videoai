@@ -73,9 +73,16 @@ function Project({ project, onChange, afterChange }) {
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState("");
   const [rec, setRec] = useState(false);
+  const [voices, setVoices] = useState([]);
+  const [presets, setPresets] = useState([]);
+  const [openShot, setOpenShot] = useState(null);
   const mediaRef = useRef(null);
 
   useEffect(() => { setIdea(project.brief_text || ""); }, [project.id]);
+  useEffect(() => {
+    api.getVoices().then(setVoices).catch(() => {});
+    api.getCameraPresets().then(setPresets).catch(() => {});
+  }, []);
 
   const run = async (label, fn) => {
     setBusy(label);
@@ -265,8 +272,14 @@ function Project({ project, onChange, afterChange }) {
                           </button>
                           <button onClick={() => decideShot(sh.id, "approve")}>✓</button>
                           <button onClick={() => decideShot(sh.id, "reject")}>✕</button>
+                          <button className={openShot === sh.id ? "primary" : ""}
+                            onClick={() => setOpenShot(openShot === sh.id ? null : sh.id)}>⚙ Элементы</button>
                         </div>
                       </div>
+                      {openShot === sh.id && (
+                        <ShotEditor shot={sh} voices={voices} presets={presets}
+                          projectId={project.id} onChange={onChange} />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -275,6 +288,100 @@ function Project({ project, onChange, afterChange }) {
           </>
         )}
       </section>
+    </div>
+  );
+}
+
+function ShotEditor({ shot, voices, presets, projectId, onChange }) {
+  const [f, setF] = useState({
+    camera_preset: shot.camera_preset || "General",
+    motion_strength: shot.motion_strength ?? 0.6,
+    lighting: shot.lighting || "",
+    voice_text: shot.voice_text || "",
+    voice_id: shot.voice_id || "",
+    music_prompt: shot.music_prompt || "",
+    sfx_prompt: shot.sfx_prompt || "",
+  });
+  const [busy, setBusy] = useState("");
+  const upd = (k, v) => setF((p) => ({ ...p, [k]: v }));
+
+  const run = async (element) => {
+    setBusy(element);
+    try {
+      await api.patchShot(shot.id, f);
+      await api.genShotElement(shot.id, element);
+      onChange(await api.getProject(projectId));
+    } catch (e) {
+      alert(element + ": " + e.message);
+    } finally {
+      setBusy("");
+    }
+  };
+  const save = async () => {
+    setBusy("save");
+    try {
+      await api.patchShot(shot.id, f);
+      onChange(await api.getProject(projectId));
+    } catch (e) { alert(e.message); } finally { setBusy(""); }
+  };
+  const B = (el, label) => (
+    <button disabled={!!busy} onClick={() => run(el)}>{busy === el ? "…" : label}</button>
+  );
+
+  return (
+    <div className="editor">
+      <div className="el-grid">
+        <div className="el">
+          <label>🎥 Камера</label>
+          <select value={f.camera_preset} onChange={(e) => upd("camera_preset", e.target.value)}>
+            {(presets.length ? presets : [f.camera_preset]).map((p) => <option key={p}>{p}</option>)}
+          </select>
+          <label>Сила движения: {f.motion_strength}</label>
+          <input type="range" min="0" max="1" step="0.1" value={f.motion_strength}
+            onChange={(e) => upd("motion_strength", parseFloat(e.target.value))} />
+          <label>💡 Свет</label>
+          <input value={f.lighting} onChange={(e) => upd("lighting", e.target.value)}
+            placeholder="напр. golden hour, soft backlight" />
+        </div>
+
+        <div className="el">
+          <label>🗣 Голос</label>
+          <textarea rows={2} value={f.voice_text} onChange={(e) => upd("voice_text", e.target.value)}
+            placeholder="Реплика для озвучки…" />
+          <select value={f.voice_id} onChange={(e) => upd("voice_id", e.target.value)}>
+            <option value="">— голос по умолчанию —</option>
+            {voices.map((v) => <option key={v.voice_id} value={v.voice_id}>{v.name}</option>)}
+          </select>
+          <div className="row">{B("voice", shot.voice_url ? "↻ Озвучить" : "Озвучить")}</div>
+          {shot.voice_url && <audio controls src={shot.voice_url} />}
+        </div>
+
+        <div className="el">
+          <label>🎵 Музыка</label>
+          <input value={f.music_prompt} onChange={(e) => upd("music_prompt", e.target.value)}
+            placeholder="напр. calm lo-fi piano" />
+          <div className="row">{B("music", shot.music_url ? "↻ Музыка" : "Музыка")}</div>
+          {shot.music_url && <audio controls src={shot.music_url} />}
+          <label>🔊 SFX</label>
+          <input value={f.sfx_prompt} onChange={(e) => upd("sfx_prompt", e.target.value)}
+            placeholder="напр. coffee machine steam" />
+          <div className="row">{B("sfx", shot.sfx_url ? "↻ SFX" : "SFX")}</div>
+          {shot.sfx_url && <audio controls src={shot.sfx_url} />}
+        </div>
+
+        <div className="el">
+          <label>🎬 Видео / Липсинк</label>
+          <div className="row">
+            {B("video", shot.video_url ? "↻ Видео (DoP)" : "Видео (DoP)")}
+            {B("lipsync", "Липсинк")}
+          </div>
+          {shot.video_url && <video controls src={shot.video_url} />}
+          <p className="hint">Видео/липсинк — Higgsfield, ждут баланс. Музыка — тариф ElevenLabs.</p>
+        </div>
+      </div>
+      <button className="primary" disabled={!!busy} onClick={save}>
+        {busy === "save" ? "…" : "💾 Сохранить параметры"}
+      </button>
     </div>
   );
 }

@@ -7,6 +7,8 @@ subscribe() блокирующе поллит до Completed и возвраща
 Точная схема arguments/результата подтверждается пробником scripts/probe_higgsfield.py
 на реальном ключе — при расхождении правится только этот файл.
 """
+import os
+
 from higgsfield_client import SyncClient
 
 from ..config import settings
@@ -37,6 +39,14 @@ class HiggsfieldProvider(VideoProvider):
             api_key=(settings.higgsfield_api_key or None),
         )
 
+    def _ensure_public(self, path_or_url: str) -> str:
+        """Higgsfield не видит localhost → локальный файл заливаем через SDK."""
+        if path_or_url.startswith(("http://", "https://")):
+            return path_or_url
+        if os.path.exists(path_or_url):
+            return self._client.upload_file(path_or_url)
+        return path_or_url
+
     def generate_image(
         self,
         prompt: str,
@@ -65,7 +75,7 @@ class HiggsfieldProvider(VideoProvider):
 
     def image_to_video(self, image_url, prompt, *, camera=None, **kwargs) -> GenResult:
         # Схема DoP уточняется на Фазе 4 (та же обёртка params).
-        params = {"input_image_url": image_url, "prompt": prompt}
+        params = {"input_image_url": self._ensure_public(image_url), "prompt": prompt}
         if camera:
             params.update(camera)
         params.update(kwargs)
@@ -74,6 +84,10 @@ class HiggsfieldProvider(VideoProvider):
 
     def lipsync(self, image_url, audio_url, **kwargs) -> GenResult:
         # Схема Speak уточняется на Фазе 4.
-        params = {"input_image_url": image_url, "audio_url": audio_url, **kwargs}
+        params = {
+            "input_image_url": self._ensure_public(image_url),
+            "audio_url": self._ensure_public(audio_url),
+            **kwargs,
+        }
         result = self._client.subscribe(settings.speak_application, {"params": params})
         return GenResult(url=extract_url(result), raw=result)

@@ -15,9 +15,10 @@ from . import agent, storage
 from .config import settings
 from .db import Base, engine, get_db
 from .models import Approval, Asset, AssetType, Project, Scene, Shot, Stage, Status
+from .presets import CAMERA_PRESETS
+from .providers import elevenlabs as el
 from .providers import get_video_provider
-from .providers.elevenlabs import transcribe as stt_transcribe
-from .schemas import ApprovalIn, IdeaIn, ScriptDraft, ScriptReviseIn, TranscriptOut
+from .schemas import ApprovalIn, IdeaIn, ScriptDraft, ScriptReviseIn, ShotPatch, TranscriptOut
 
 os.makedirs(settings.media_dir, exist_ok=True)
 
@@ -73,7 +74,7 @@ def set_idea(project_id: str, body: IdeaIn, db: Session = Depends(get_db)):
 async def transcribe(file: UploadFile = File(...)):
     audio = await file.read()
     try:
-        text = stt_transcribe(audio, filename=file.filename or "audio.webm")
+        text = el.transcribe(audio, filename=file.filename or "audio.webm")
     except Exception as e:
         raise HTTPException(502, f"STT error: {e}")
     return TranscriptOut(text=text)
@@ -220,6 +221,125 @@ def generate_frame(shot_id: str, db: Session = Depends(get_db)):
     return _shot_dto(db, shot)
 
 
+# ---------- Стадия 5: шот-эдитор (элементы шота) ----------
+@app.get("/api/voices")
+def voices():
+    try:
+        return el.list_voices()
+    except Exception as e:
+        raise HTTPException(502, f"ElevenLabs error: {e}")
+
+
+@app.get("/api/camera-presets")
+def camera_presets():
+    return CAMERA_PRESETS
+
+
+@app.patch("/api/shots/{shot_id}")
+def patch_shot(shot_id: str, body: ShotPatch, db: Session = Depends(get_db)):
+    shot = db.get(Shot, shot_id)
+    if not shot:
+        raise HTTPException(404, "Шот не найден")
+    g = dict(shot.graph_json or {})
+    if body.lighting is not None:
+        shot.lighting_prompt = body.lighting
+    for field in ("camera_preset", "motion_strength", "voice_text", "voice_id",
+                  "music_prompt", "sfx_prompt"):
+        val = getattr(body, field)
+        if val is not None:
+            g[field] = val
+    shot.graph_json = g
+    db.commit()
+    return _shot_dto(db, shot)
+
+
+@app.post("/api/shots/{shot_id}/voice:generate")
+def gen_voice(shot_id: str, db: Session = Depends(get_db)):
+    shot, g = _shot_and_graph(db, shot_id)
+    text = g.get("voice_text", "").strip()
+    if not text:
+        raise HTTPException(400, "Пустой текст озвучки")
+    voice_id = g.get("voice_id") or "21m00Tcm4TlvDq8ikWAM"
+    try:
+        audio = el.tts(text, voice_id)
+    except Exception as e:
+        raise HTTPException(502, f"ElevenLabs TTS error: {e}")
+    _save_shot_asset(db, shot_id, AssetType.voice, storage.save_bytes(audio, ".mp3"), "elevenlabs")
+    db.commit()
+    return _shot_dto(db, shot)
+
+
+@app.post("/api/shots/{shot_id}/sfx:generate")
+def gen_sfx(shot_id: str, db: Session = Depends(get_db)):
+    shot, g = _shot_and_graph(db, shot_id)
+    prompt = g.get("sfx_prompt", "").strip()
+    if not prompt:
+        raise HTTPException(400, "Пустой промпт SFX")
+    try:
+        audio = el.sound_effect(prompt, duration_seconds=min(shot.duration or 5, 22))
+    except Exception as e:
+        raise HTTPException(502, f"ElevenLabs SFX error: {e}")
+    _save_shot_asset(db, shot_id, AssetType.sfx, storage.save_bytes(audio, ".mp3"), "elevenlabs")
+    db.commit()
+    return _shot_dto(db, shot)
+
+
+@app.post("/api/shots/{shot_id}/music:generate")
+def gen_music(shot_id: str, db: Session = Depends(get_db)):
+    shot, g = _shot_and_graph(db, shot_id)
+    prompt = g.get("music_prompt", "").strip()
+    if not prompt:
+        raise HTTPException(400, "Пустой промпт музыки")
+    try:
+        audio = el.music(prompt, length_ms=int((shot.duration or 10) * 1000))
+    except Exception as e:
+        raise HTTPException(502, f"ElevenLabs music error: {e}")
+    _save_shot_asset(db, shot_id, AssetType.music, storage.save_bytes(audio, ".mp3"), "elevenlabs")
+    db.commit()
+    return _shot_dto(db, shot)
+
+
+@app.post("/api/shots/{shot_id}/video:generate")
+def gen_video(shot_id: str, db: Session = Depends(get_db)):
+    shot, g = _shot_and_graph(db, shot_id)
+    frame = _shot_asset(db, shot_id, AssetType.frame)
+    if not frame or not frame.url:
+        raise HTTPException(400, "Нет ключевого кадра — сначала сгенерируй кадр (Фаза 3)")
+    frame_path = _media_fs_path(frame.url)
+    camera = {"motion": g.get("camera_preset", "General"),
+              "motion_strength": g.get("motion_strength", 0.6)}
+    prompt = (shot.camera_json or {}).get("frame_prompt") or shot.description
+    try:
+        res = get_video_provider().image_to_video(frame_path, prompt, camera=camera)
+    except Exception as e:
+        raise HTTPException(502, f"Higgsfield DoP error: {e}")
+    if not res.url:
+        raise HTTPException(502, "Провайдер не вернул URL видео")
+    _save_shot_asset(db, shot_id, AssetType.video, storage.save_from_url(res.url, ".mp4"), "higgsfield")
+    db.commit()
+    return _shot_dto(db, shot)
+
+
+@app.post("/api/shots/{shot_id}/lipsync:generate")
+def gen_lipsync(shot_id: str, db: Session = Depends(get_db)):
+    shot, g = _shot_and_graph(db, shot_id)
+    frame = _shot_asset(db, shot_id, AssetType.frame)
+    voice = _shot_asset(db, shot_id, AssetType.voice)
+    if not frame or not frame.url:
+        raise HTTPException(400, "Нет кадра для липсинка")
+    if not voice or not voice.url:
+        raise HTTPException(400, "Нет озвучки — сначала сгенерируй голос")
+    try:
+        res = get_video_provider().lipsync(_media_fs_path(frame.url), _media_fs_path(voice.url))
+    except Exception as e:
+        raise HTTPException(502, f"Higgsfield Speak error: {e}")
+    if not res.url:
+        raise HTTPException(502, "Провайдер не вернул URL липсинка")
+    _save_shot_asset(db, shot_id, AssetType.video, storage.save_from_url(res.url, ".mp4"), "higgsfield")
+    db.commit()
+    return _shot_dto(db, shot)
+
+
 # ---------- Gate-подтверждения ----------
 @app.post("/api/scenes/{scene_id}/approve")
 def approve_scene(scene_id: str, body: ApprovalIn, db: Session = Depends(get_db)):
@@ -318,15 +438,51 @@ def _decide_shot(db: Session, shot_id: str, decision: Status, body: ApprovalIn):
     return _shot_dto(db, shot)
 
 
+def _shot_and_graph(db: Session, shot_id: str) -> tuple[Shot, dict]:
+    shot = db.get(Shot, shot_id)
+    if not shot:
+        raise HTTPException(404, "Шот не найден")
+    return shot, dict(shot.graph_json or {})
+
+
+def _shot_asset(db: Session, shot_id: str, atype: AssetType) -> Asset | None:
+    return db.query(Asset).filter(Asset.shot_id == shot_id, Asset.type == atype).first()
+
+
+def _save_shot_asset(db: Session, shot_id: str, atype: AssetType, url: str, source: str) -> None:
+    a = _shot_asset(db, shot_id, atype)
+    if a:
+        a.url, a.source, a.approved = url, source, False
+        a.version += 1
+    else:
+        db.add(Asset(shot_id=shot_id, type=atype, url=url, source=source))
+
+
+def _media_fs_path(url: str) -> str:
+    """/media/<name> → локальный путь файла (для загрузки в Higgsfield)."""
+    name = url.rsplit("/", 1)[-1]
+    return os.path.join(settings.media_dir, name)
+
+
 def _shot_dto(db: Session, s: Shot) -> dict:
-    frame = db.query(Asset).filter(Asset.shot_id == s.id, Asset.type == AssetType.frame).first()
+    g = s.graph_json or {}
     cam = s.camera_json or {}
+    assets = {a.type: a for a in db.query(Asset).filter(Asset.shot_id == s.id).all()}
     return {
         "id": s.id, "order": s.order, "description": s.description,
         "camera": cam.get("movement", ""), "lighting": s.lighting_prompt,
         "duration": s.duration, "status": s.status,
-        "frame_url": frame.url if frame else "",
-        "frame_version": frame.version if frame else 0,
+        "frame_url": assets[AssetType.frame].url if AssetType.frame in assets else "",
+        "video_url": assets[AssetType.video].url if AssetType.video in assets else "",
+        "voice_url": assets[AssetType.voice].url if AssetType.voice in assets else "",
+        "music_url": assets[AssetType.music].url if AssetType.music in assets else "",
+        "sfx_url": assets[AssetType.sfx].url if AssetType.sfx in assets else "",
+        "camera_preset": g.get("camera_preset", "General"),
+        "motion_strength": g.get("motion_strength", 0.6),
+        "voice_text": g.get("voice_text", ""),
+        "voice_id": g.get("voice_id", ""),
+        "music_prompt": g.get("music_prompt", ""),
+        "sfx_prompt": g.get("sfx_prompt", ""),
     }
 
 
