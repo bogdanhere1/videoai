@@ -127,6 +127,10 @@ function Project({ project, onChange, afterChange }) {
     return api.getProject(project.id);
   });
   const shotsCount = project.scenes.reduce((n, s) => n + (s.shots?.length || 0), 0);
+  const assemble = () => run("assemble", async () => {
+    await api.assembleProject(project.id);
+    return api.getProject(project.id);
+  });
 
   const toggleRec = async () => {
     if (rec) { mediaRef.current?.stop(); return; }
@@ -286,6 +290,20 @@ function Project({ project, onChange, afterChange }) {
               </div>
             ))}
           </>
+        )}
+      </section>
+
+      <section>
+        <h2>5 · Сборка</h2>
+        <button className="primary" disabled={shotsCount === 0 || busy} onClick={assemble}>
+          {busy === "assemble" ? "Собираю…" : project.final_url ? "↻ Пересобрать ролик" : "Собрать ролик"}
+        </button>
+        <p className="hint" style={{ marginTop: 8 }}>
+          Склейка шотов + сведение звука (голос/музыка/SFX) через ffmpeg. Видео шотов —
+          Higgsfield (ждёт баланс); без видео шот берётся как статичный кадр.
+        </p>
+        {project.final_url && (
+          <video controls src={project.final_url} style={{ width: "100%", maxWidth: 640, marginTop: 12, borderRadius: 10 }} />
         )}
       </section>
     </div>

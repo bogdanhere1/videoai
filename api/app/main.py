@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
-from . import agent, storage
+from . import agent, assembly, storage
 from .config import settings
 from .db import Base, engine, get_db
 from .models import Approval, Asset, AssetType, Project, Scene, Shot, Stage, Status
@@ -340,6 +340,43 @@ def gen_lipsync(shot_id: str, db: Session = Depends(get_db)):
     return _shot_dto(db, shot)
 
 
+# ---------- Стадия 6: сборка ----------
+@app.post("/api/projects/{project_id}/assemble")
+def assemble_project(project_id: str, db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    shots_data: list[dict] = []
+    for scene in sorted(project.scenes, key=lambda x: x.order):
+        for shot in sorted(scene.shots, key=lambda x: x.order):
+            if shot.status == Status.rejected:
+                continue
+            assets = {a.type: a for a in db.query(Asset).filter(Asset.shot_id == shot.id).all()}
+            audio = [assets[t].url for t in (AssetType.voice, AssetType.music, AssetType.sfx)
+                     if t in assets and assets[t].url]
+            shots_data.append({
+                "video_url": assets[AssetType.video].url if AssetType.video in assets else "",
+                "frame_url": assets[AssetType.frame].url if AssetType.frame in assets else "",
+                "audio_urls": audio,
+                "duration": shot.duration,
+            })
+    if not shots_data:
+        raise HTTPException(400, "Нет шотов для сборки — сначала сделай раскадровку.")
+    try:
+        final_url = assembly.assemble(shots_data)
+    except assembly.FFmpegMissing as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Сборка не удалась: {e}")
+    a = db.query(Asset).filter(Asset.project_id == project_id, Asset.type == AssetType.final).first()
+    if a:
+        a.url, a.version = final_url, a.version + 1
+    else:
+        db.add(Asset(project_id=project_id, type=AssetType.final, url=final_url, source="ffmpeg"))
+    project.stage = Stage.assembly
+    project.status = Status.review
+    db.commit()
+    return {"final_url": final_url, "shots": len(shots_data)}
+
+
 # ---------- Gate-подтверждения ----------
 @app.post("/api/scenes/{scene_id}/approve")
 def approve_scene(scene_id: str, body: ApprovalIn, db: Session = Depends(get_db)):
@@ -498,8 +535,12 @@ def _project_dto(p: Project, db: Session) -> dict:
     concepts = db.query(Asset).filter(
         Asset.project_id == p.id, Asset.type == AssetType.concept
     ).all()
+    final = db.query(Asset).filter(
+        Asset.project_id == p.id, Asset.type == AssetType.final
+    ).first()
     return {
         "id": p.id, "title": p.title, "stage": p.stage, "status": p.status,
+        "final_url": final.url if final else "",
         "brief_text": p.brief_text, "logline": p.logline,
         "scenes": [
             {

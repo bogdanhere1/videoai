@@ -23,6 +23,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ feedback }),
     }).then(j),
+  assembleProject: (id) =>
+    fetch(`/api/projects/${id}/assemble`, { method: "POST" }).then(j),
   getVoices: () => fetch("/api/voices").then(j),
   getCameraPresets: () => fetch("/api/camera-presets").then(j),
   patchShot: (shotId, patch) =>
