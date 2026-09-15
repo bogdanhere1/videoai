@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 
 const STAGE_LABEL = {
@@ -189,9 +189,9 @@ function Project({ project, onChange, afterChange }) {
         <span className="cost">≈ ${project.cost_usd ?? 0} · API</span>
       </div>
 
-      <div className="branch">
-      <StageSection n={1} title="Идея" k="idea" open={openStage === "idea"}
-        status={stageStatus("idea")} onToggle={() => toggleStage("idea")}>
+      <Flow items={BRANCH} open={openStage} onToggle={toggleStage} statusOf={stageStatus} />
+      {openStage === "idea" && (
+      <div className="stage-panel">
         <textarea rows={3} value={idea} onChange={(e) => setIdea(e.target.value)}
           placeholder="Опиши идею ролика — текстом или голосом…" />
         <div className="row">
@@ -203,10 +203,11 @@ function Project({ project, onChange, afterChange }) {
           </button>
           {busy === "stt" && <span className="muted">распознаю…</span>}
         </div>
-      </StageSection>
+      </div>
+      )}
 
-      <StageSection n={2} title="Сценарий" k="script" open={openStage === "script"}
-        status={stageStatus("script")} onToggle={() => toggleStage("script")}>
+      {openStage === "script" && (
+      <div className="stage-panel">
         {project.logline && <p className="logline">«{project.logline}»</p>}
         <button className="primary" disabled={!project.brief_text || busy} onClick={genScript}>
           {busy === "script" ? "Генерирую…" : project.scenes.length ? "Перегенерировать" : "Сгенерировать сценарий"}
@@ -240,10 +241,11 @@ function Project({ project, onChange, afterChange }) {
             <button disabled={!feedback.trim() || busy} onClick={revise}>Внести правки</button>
           </div>
         )}
-      </StageSection>
+      </div>
+      )}
 
-      <StageSection n={3} title="Визуал-стиль" k="style" open={openStage === "style"}
-        status={stageStatus("style")} onToggle={() => toggleStage("style")}>
+      {openStage === "style" && (
+      <div className="stage-panel">
         {project.concepts.length === 0 ? (
           <button className="primary" disabled={!project.scenes.length || busy} onClick={extractVisuals}>
             {busy === "visuals" ? "Извлекаю…" : "Извлечь визуалы из сценария"}
@@ -289,10 +291,11 @@ function Project({ project, onChange, afterChange }) {
             </div>
           </>
         )}
-      </StageSection>
+      </div>
+      )}
 
-      <StageSection n={4} title="Раскадровка + шоты" k="storyboard" open={openStage === "storyboard"}
-        status={stageStatus("storyboard")} onToggle={() => toggleStage("storyboard")}>
+      {openStage === "storyboard" && (
+      <div className="stage-panel wide">
         {shotsCount === 0 ? (
           <button className="primary" disabled={!project.scenes.length || busy} onClick={genStoryboard}>
             {busy === "storyboard" ? "Раскадровываю…" : "Сделать раскадровку"}
@@ -346,10 +349,11 @@ function Project({ project, onChange, afterChange }) {
             ))}
           </>
         )}
-      </StageSection>
+      </div>
+      )}
 
-      <StageSection n={5} title="Сборка" k="assembly" open={openStage === "assembly"}
-        status={stageStatus("assembly")} onToggle={() => toggleStage("assembly")}>
+      {openStage === "assembly" && (
+      <div className="stage-panel">
         <button className="primary" disabled={shotsCount === 0 || busy} onClick={assemble}>
           {busy === "assemble" ? "Собираю…" : project.final_url ? "↻ Пересобрать ролик" : "Собрать ролик"}
         </button>
@@ -360,26 +364,27 @@ function Project({ project, onChange, afterChange }) {
         {project.final_url && (
           <video controls src={project.final_url} style={{ width: "100%", maxWidth: 640, marginTop: 12, borderRadius: 10 }} />
         )}
-      </StageSection>
       </div>
+      )}
     </div>
   );
 }
 
-function StageSection({ n, title, k, status, open, onToggle, children }) {
+function Flow({ items, open, onToggle, statusOf }) {
   return (
-    <div className={`snode ${open ? "open" : ""} ${status}`}>
-      <div className="snode-rail">
-        <div className={`snode-dot ${status}`}>{status === "done" ? "✓" : n}</div>
-      </div>
-      <div className="snode-main">
-        <button className="snode-head" onClick={onToggle}>
-          <span className="snode-title">{n} · {title}</span>
-          <span className={`snode-state ${status}`}>{status === "done" ? "готово" : "пусто"}</span>
-          <span className="snode-chev">{open ? "▾" : "▸"}</span>
-        </button>
-        {open && <div className="snode-body">{children}</div>}
-      </div>
+    <div className="flow">
+      {items.map((st, i) => (
+        <Fragment key={st.key}>
+          <button
+            className={`fnode ${open === st.key ? "open" : ""} ${statusOf(st.key)}`}
+            onClick={() => onToggle(st.key)}
+          >
+            <span className="fnode-n">{statusOf(st.key) === "done" ? "✓" : st.n}</span>
+            <span className="fnode-title">{st.title}</span>
+          </button>
+          {i < items.length - 1 && <span className="farrow" />}
+        </Fragment>
+      ))}
     </div>
   );
 }
