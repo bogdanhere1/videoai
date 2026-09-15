@@ -68,21 +68,15 @@ export default function App() {
 }
 
 function ProjectView({ project, onChange, afterChange }) {
-  const [idea, setIdea] = useState(project.brief_text || "");
-  const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState("");
-  const [rec, setRec] = useState(false);
   const [voices, setVoices] = useState([]);
   const [presets, setPresets] = useState([]);
   const [openShot, setOpenShot] = useState(null);
   const [editKey, setEditKey] = useState(null);
-  const [editText, setEditText] = useState("");
   const [expanded, setExpanded] = useState(() => new Set([stageKey(project.stage)]));
   const [showSettings, setShowSettings] = useState(false);
-  const mediaRef = useRef(null);
 
   useEffect(() => {
-    setIdea(project.brief_text || "");
     setExpanded(new Set([stageKey(project.stage)]));
   }, [project.id]);
   useEffect(() => {
@@ -103,24 +97,13 @@ function ProjectView({ project, onChange, afterChange }) {
     }
   };
 
-  const startEdit = (key, text) => { setEditKey(key); setEditText(text); };
-  const saveEdit = (fn) => run("edit", async () => {
-    await fn(editText);
+  // Правка текста: значение живёт локально в EditBox, наружу приходит только на «Сохранить».
+  const startEdit = (key) => setEditKey(key);
+  const commitEdit = (fn) => run("edit", async () => {
+    await fn();
     setEditKey(null);
     return api.getProject(project.id);
   });
-  const editBox = (fn) => (
-    <>
-      <textarea className="scene-edit" rows={5} value={editText}
-        onChange={(e) => setEditText(e.target.value)} autoFocus />
-      <div className="row">
-        <button className="primary" disabled={busy} onClick={() => saveEdit(fn)}>
-          {busy === "edit" ? "…" : "Сохранить"}
-        </button>
-        <button onClick={() => setEditKey(null)}>Отмена</button>
-      </div>
-    </>
-  );
 
   const shotsCount = project.scenes.reduce((n, s) => n + (s.shots?.length || 0), 0);
   const stageStatus = (key) => {
@@ -139,31 +122,10 @@ function ProjectView({ project, onChange, afterChange }) {
     return n;
   });
 
-  const toggleRec = async () => {
-    if (rec) { mediaRef.current?.stop(); return; }
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mr = new MediaRecorder(stream);
-    const chunks = [];
-    mr.ondataavailable = (e) => chunks.push(e.data);
-    mr.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop());
-      setBusy("stt");
-      try {
-        const { text } = await api.transcribe(new Blob(chunks, { type: "audio/webm" }));
-        setIdea((prev) => (prev ? prev + " " : "") + text);
-      } catch (e) { alert("STT: " + e.message); } finally { setBusy(""); }
-    };
-    mediaRef.current = mr;
-    mr.start();
-    setRec(true);
-    mr.addEventListener("stop", () => setRec(false));
-  };
-
   const ctx = {
-    project, onChange, api,
-    idea, setIdea, feedback, setFeedback, busy, rec, voices, presets,
-    openShot, setOpenShot, editKey, editText, setEditText, setEditKey,
-    startEdit, saveEdit, editBox, run, toggleRec, shotsCount, stageStatus,
+    project, onChange, busy, voices, presets,
+    openShot, setOpenShot, editKey, setEditKey,
+    startEdit, commitEdit, run, shotsCount, stageStatus,
     expanded, toggleExpand,
   };
 
@@ -264,20 +226,7 @@ function StageBody({ k }) {
   const c = useContext(PC);
   const { project, busy } = c;
 
-  if (k === "idea") return (
-    <>
-      <textarea rows={3} value={c.idea} onChange={(e) => c.setIdea(e.target.value)}
-        placeholder="Опиши идею ролика — текстом или голосом…" />
-      <div className="row">
-        <button onClick={c.toggleRec} className={c.rec ? "rec" : ""}>{c.rec ? "⏹ Стоп" : "🎤 Голос"}</button>
-        <button className="primary" disabled={!c.idea.trim() || busy}
-          onClick={() => c.run("idea", () => api.setIdea(project.id, c.idea))}>
-          {busy === "idea" ? "…" : "Сохранить идею"}
-        </button>
-        {busy === "stt" && <span className="muted">распознаю…</span>}
-      </div>
-    </>
-  );
+  if (k === "idea") return <IdeaPanel />;
 
   if (k === "script") return (
     <>
@@ -289,11 +238,14 @@ function StageBody({ k }) {
       {project.scenes.map((s) => (
         <div key={s.id} className={`scene ${s.status}`}>
           <div className="scene-head"><b>Сцена {s.order}</b><span className={`tag ${s.status}`}>{s.status}</span></div>
-          {c.editKey === "scene:" + s.id ? c.editBox((t) => api.editScene(s.id, t)) : (
+          {c.editKey === "scene:" + s.id ? (
+            <EditBox initial={s.script_text} busy={busy === "edit"} onCancel={() => c.setEditKey(null)}
+              onSave={(val) => c.commitEdit(() => api.editScene(s.id, val))} />
+          ) : (
             <>
               <pre>{s.script_text}</pre>
               <div className="row">
-                <button onClick={() => c.startEdit("scene:" + s.id, s.script_text)}>✎ Править</button>
+                <button onClick={() => c.startEdit("scene:" + s.id)}>✎ Править</button>
                 <button onClick={() => c.run("scene", async () => { await api.decideScene(s.id, "approve"); return api.getProject(project.id); })}>✓ Ок</button>
                 <button onClick={() => c.run("scene", async () => { await api.decideScene(s.id, "reject"); return api.getProject(project.id); })}>✕ Переделать</button>
               </div>
@@ -301,16 +253,7 @@ function StageBody({ k }) {
           )}
         </div>
       ))}
-      {project.scenes.length > 0 && (
-        <div className="revise">
-          <textarea rows={2} value={c.feedback} onChange={(e) => c.setFeedback(e.target.value)}
-            placeholder="Правки ко всему сценарию…" />
-          <button disabled={!c.feedback.trim() || busy}
-            onClick={() => c.run("script", async () => { const p = await api.reviseScript(project.id, c.feedback); c.setFeedback(""); return p; })}>
-            Внести правки
-          </button>
-        </div>
-      )}
+      {project.scenes.length > 0 && <RevisePanel />}
     </>
   );
 
@@ -334,14 +277,17 @@ function StageBody({ k }) {
               </div>
               <div className="concept-body">
                 <b>{cc.name}</b>
-                {c.editKey === "concept:" + cc.id ? c.editBox((t) => api.editConcept(cc.id, t)) : (
+                {c.editKey === "concept:" + cc.id ? (
+                  <EditBox initial={cc.prompt} busy={busy === "edit"} onCancel={() => c.setEditKey(null)}
+                    onSave={(val) => c.commitEdit(() => api.editConcept(cc.id, val))} />
+                ) : (
                   <>
                     <p className="cprompt">{cc.prompt}</p>
                     <div className="row">
                       <button disabled={busy} onClick={() => c.run("concept:" + cc.id, async () => { await api.generateConcept(cc.id); return api.getProject(project.id); })}>
                         {busy === "concept:" + cc.id ? "Генерирую…" : cc.url ? "↻ Перегенерировать" : "Сгенерировать"}
                       </button>
-                      <button onClick={() => c.startEdit("concept:" + cc.id, cc.prompt)}>✎</button>
+                      <button onClick={() => c.startEdit("concept:" + cc.id)}>✎</button>
                       {cc.url && (
                         <>
                           <button onClick={() => c.run("concept", async () => { await api.decideAsset(cc.id, "approve"); return api.getProject(project.id); })}>✓</button>
@@ -381,7 +327,10 @@ function StageBody({ k }) {
                     <span className="dur">{sh.duration}с</span>
                   </div>
                   <div className="shot-body">
-                    {c.editKey === "shot:" + sh.id ? c.editBox((t) => api.patchShot(sh.id, { description: t })) : (
+                    {c.editKey === "shot:" + sh.id ? (
+                      <EditBox initial={sh.description} busy={busy === "edit"} onCancel={() => c.setEditKey(null)}
+                        onSave={(val) => c.commitEdit(() => api.patchShot(sh.id, { description: val }))} />
+                    ) : (
                       <>
                         <p className="shot-desc">{sh.description}</p>
                         <div className="shot-meta"><span>🎥 {sh.camera}</span><span>💡 {sh.lighting}</span></div>
@@ -389,7 +338,7 @@ function StageBody({ k }) {
                           <button disabled={busy} onClick={() => c.run("frame:" + sh.id, async () => { await api.generateFrame(sh.id); return api.getProject(project.id); })}>
                             {busy === "frame:" + sh.id ? "…" : sh.frame_url ? "↻ Кадр" : "Кадр"}
                           </button>
-                          <button onClick={() => c.startEdit("shot:" + sh.id, sh.description)}>✎</button>
+                          <button onClick={() => c.startEdit("shot:" + sh.id)}>✎</button>
                           <button onClick={() => c.run("shot", async () => { await api.decideShot(sh.id, "approve"); return api.getProject(project.id); })}>✓</button>
                           <button onClick={() => c.run("shot", async () => { await api.decideShot(sh.id, "reject"); return api.getProject(project.id); })}>✕</button>
                           <button className={c.openShot === sh.id ? "primary" : ""}
@@ -425,6 +374,80 @@ function StageBody({ k }) {
   );
 
   return null;
+}
+
+function EditBox({ initial, busy, onSave, onCancel }) {
+  const [val, setVal] = useState(initial || "");
+  return (
+    <>
+      <textarea className="scene-edit" rows={5} value={val} autoFocus
+        onChange={(e) => setVal(e.target.value)} />
+      <div className="row">
+        <button className="primary" disabled={busy} onClick={() => onSave(val)}>
+          {busy ? "…" : "Сохранить"}
+        </button>
+        <button onClick={onCancel}>Отмена</button>
+      </div>
+    </>
+  );
+}
+
+function IdeaPanel() {
+  const { project, run } = useContext(PC);
+  const [text, setText] = useState(project.brief_text || "");
+  const [rec, setRec] = useState(false);
+  const [stt, setStt] = useState(false);
+  const mediaRef = useRef(null);
+  useEffect(() => { setText(project.brief_text || ""); }, [project.id]);
+
+  const toggleRec = async () => {
+    if (rec) { mediaRef.current?.stop(); return; }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mr = new MediaRecorder(stream);
+    const chunks = [];
+    mr.ondataavailable = (e) => chunks.push(e.data);
+    mr.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      setStt(true);
+      try {
+        const { text: t } = await api.transcribe(new Blob(chunks, { type: "audio/webm" }));
+        setText((p) => (p ? p + " " : "") + t);
+      } catch (e) { alert("STT: " + e.message); } finally { setStt(false); }
+    };
+    mediaRef.current = mr;
+    mr.start(); setRec(true);
+    mr.addEventListener("stop", () => setRec(false));
+  };
+
+  return (
+    <>
+      <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)}
+        placeholder="Опиши идею ролика — текстом или голосом…" />
+      <div className="row">
+        <button onClick={toggleRec} className={rec ? "rec" : ""}>{rec ? "⏹ Стоп" : "🎤 Голос"}</button>
+        <button className="primary" disabled={!text.trim()}
+          onClick={() => run("idea", () => api.setIdea(project.id, text))}>
+          Сохранить идею
+        </button>
+        {stt && <span className="muted">распознаю…</span>}
+      </div>
+    </>
+  );
+}
+
+function RevisePanel() {
+  const { project, run } = useContext(PC);
+  const [fb, setFb] = useState("");
+  return (
+    <div className="revise">
+      <textarea rows={2} value={fb} onChange={(e) => setFb(e.target.value)}
+        placeholder="Правки ко всему сценарию…" />
+      <button disabled={!fb.trim()}
+        onClick={() => run("script", async () => { const p = await api.reviseScript(project.id, fb); setFb(""); return p; })}>
+        Внести правки
+      </button>
+    </div>
+  );
 }
 
 function ShotEditor({ shot }) {
