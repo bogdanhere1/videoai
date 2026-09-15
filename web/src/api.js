@@ -31,6 +31,13 @@ export const api = {
     }).then(j),
   assembleProject: (id) =>
     fetch(`/api/projects/${id}/assemble`, { method: "POST" }).then(j),
+  getSettings: (id) => fetch(`/api/projects/${id}/settings`).then(j),
+  putSetting: (id, stage, cfg) =>
+    fetch(`/api/projects/${id}/settings/${stage}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    }).then(j),
   getVoices: () => fetch("/api/voices").then(j),
   getCameraPresets: () => fetch("/api/camera-presets").then(j),
   patchShot: (shotId, patch) =>

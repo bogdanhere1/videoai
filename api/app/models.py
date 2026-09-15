@@ -138,6 +138,19 @@ class Approval(Base):
     at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class StageSetting(Base):
+    """Индивидуальное подключение нейросети (API) на конкретном этапе пайплайна."""
+    __tablename__ = "stage_settings"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    stage: Mapped[str] = mapped_column(String)          # idea|script|style|storyboard|shots|assembly
+    provider: Mapped[str] = mapped_column(String, default="")   # gemini|openai|higgsfield|custom|…
+    api_key: Mapped[str] = mapped_column(Text, default="")
+    base_url: Mapped[str] = mapped_column(String, default="")
+    model: Mapped[str] = mapped_column(String, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class Job(Base):
     __tablename__ = "jobs"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)

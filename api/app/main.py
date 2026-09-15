@@ -15,15 +15,18 @@ from . import agent, assembly, storage
 from .config import settings
 from .db import Base, engine, get_db
 from .models import (
-    Approval, Asset, AssetType, Job, JobStatus, Project, Scene, Shot, Stage, Status,
+    Approval, Asset, AssetType, Job, JobStatus, Project, Scene, Shot, Stage,
+    StageSetting, Status,
 )
 from .presets import CAMERA_PRESETS
 from .providers import elevenlabs as el
 from .providers import get_video_provider
 from .schemas import (
     ApprovalIn, ConceptEdit, IdeaIn, SceneEdit, ScriptDraft, ScriptReviseIn, ShotPatch,
-    TranscriptOut,
+    StageSettingIn, TranscriptOut,
 )
+
+STAGE_KEYS = ["idea", "script", "style", "storyboard", "shots", "assembly"]
 
 os.makedirs(settings.media_dir, exist_ok=True)
 
@@ -383,6 +386,41 @@ def gen_lipsync(shot_id: str, db: Session = Depends(get_db)):
     _log_usage(db, _shot_project_id(shot), "lipsync", "higgsfield", COST_USD["lipsync"])
     db.commit()
     return _shot_dto(db, shot)
+
+
+# ---------- Настройки: API-подключения по этапам ----------
+@app.get("/api/projects/{project_id}/settings")
+def get_settings(project_id: str, db: Session = Depends(get_db)):
+    _get_project(db, project_id)
+    rows = {s.stage: s for s in db.query(StageSetting).filter(StageSetting.project_id == project_id).all()}
+    out = {}
+    for stage in STAGE_KEYS:
+        s = rows.get(stage)
+        out[stage] = {
+            "provider": s.provider if s else "",
+            "api_key": s.api_key if s else "",
+            "base_url": s.base_url if s else "",
+            "model": s.model if s else "",
+            "enabled": s.enabled if s else False,
+        }
+    return out
+
+
+@app.put("/api/projects/{project_id}/settings/{stage}")
+def put_setting(project_id: str, stage: str, body: StageSettingIn, db: Session = Depends(get_db)):
+    _get_project(db, project_id)
+    if stage not in STAGE_KEYS:
+        raise HTTPException(400, "Неизвестный этап")
+    row = db.query(StageSetting).filter(
+        StageSetting.project_id == project_id, StageSetting.stage == stage
+    ).first()
+    if not row:
+        row = StageSetting(project_id=project_id, stage=stage)
+        db.add(row)
+    row.provider, row.api_key = body.provider, body.api_key
+    row.base_url, row.model, row.enabled = body.base_url, body.model, body.enabled
+    db.commit()
+    return {"stage": stage, "enabled": row.enabled, "provider": row.provider}
 
 
 # ---------- Стадия 6: сборка ----------

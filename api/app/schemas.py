@@ -45,6 +45,14 @@ class ConceptEdit(BaseModel):
     prompt: str
 
 
+class StageSettingIn(BaseModel):
+    provider: str = ""
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+    enabled: bool = False
+
+
 # ---- Шот-эдитор (Фаза 4) ----
 class ShotPatch(BaseModel):
     description: str | None = None
