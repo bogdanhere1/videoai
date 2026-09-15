@@ -42,7 +42,8 @@ main { flex: 1; position: relative; overflow: hidden; }
 .canvas-actions { display: flex; align-items: center; gap: 10px; }
 .canvas-root .react-flow { flex: 1; min-height: 0; }
 .react-flow__attribution { display: none; }
-.react-flow__handle { width: 7px; height: 7px; background: #6366f1; border: none; }
+.react-flow__handle { width: 11px; height: 11px; background: #6366f1; border: 2px solid #0d1017; }
+.react-flow__handle:hover { background: #a78bfa; }
 
 /* Нода-этап на доске */
 .gnode {
@@ -203,6 +204,15 @@ main { flex: 1; position: relative; overflow: hidden; }
 .concept-body { padding: 10px 12px 12px; }
 .concept-body b { font-size: 14px; }
 .cprompt { font-size: 12px; color: #94a3b8; margin: 6px 0 10px; line-height: 1.4; max-height: 54px; overflow: hidden; }
+
+/* Раскадровка — горизонтальная лента шотов по порядку */
+.gnode.stage-storyboard.open { width: 660px; max-width: 82vw; }
+.shots-strip { display: flex; gap: 12px; overflow-x: auto; padding: 4px 2px 12px; align-items: flex-start; }
+.shots-strip .shot { flex: 0 0 230px; }
+.shots-strip::-webkit-scrollbar { height: 10px; }
+.shots-strip::-webkit-scrollbar-track { background: transparent; }
+.shots-strip::-webkit-scrollbar-thumb { background: #253044; border-radius: 8px; border: 2px solid #141924; }
+.strip-scene { font-size: 11px; font-weight: 700; color: #a5b4fc; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
 
 .sb-scene { margin-top: 16px; }
 .sb-scene-title { font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }

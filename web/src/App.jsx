@@ -227,10 +227,33 @@ function Board({ project }) {
   }, [nodes, posKey]);
 
   const stageEdges = BRANCH.slice(1).map((st, i) => ({ id: "e" + i, source: BRANCH[i].key, target: st.key }));
-  const targetsFor = (m) => (m.target_stage === "both" ? ["style", "storyboard"] : [m.target_stage]);
+  const targetsFor = (m) => (m.target_stage === "both" ? ["style", "storyboard"]
+    : ["style", "storyboard"].includes(m.target_stage) ? [m.target_stage] : []);
   const modEdges = modifiers.flatMap((m) => targetsFor(m).map((t) => ({
-    id: "m" + m.id + t, source: m.id, target: t, animated: true, style: { stroke: "#a78bfa" },
+    id: "m" + m.id + t, source: m.id, target: t, animated: true,
+    style: { stroke: "#a78bfa" }, data: { mid: m.id, stage: t },
   })));
+
+  const onConnect = async ({ source, target }) => {
+    const m = modifiers.find((x) => x.id === source);
+    if (!m || !["style", "storyboard"].includes(target)) return;
+    const cur = m.target_stage;
+    const next = (cur && cur !== "none" && cur !== target) ? "both" : target;
+    await api.patchModifier(m.id, { target_stage: next });
+    ctx.reloadModifiers();
+  };
+  const onEdgesDelete = async (deleted) => {
+    for (const e of deleted) {
+      const d = e.data || {};
+      if (!d.mid) continue;
+      const m = modifiers.find((x) => x.id === d.mid);
+      if (!m) continue;
+      const next = m.target_stage === "both"
+        ? (d.stage === "style" ? "storyboard" : "style") : "none";
+      await api.patchModifier(m.id, { target_stage: next });
+    }
+    ctx.reloadModifiers();
+  };
 
   return (
     <ReactFlow
@@ -238,6 +261,8 @@ function Board({ project }) {
       edges={[...stageEdges, ...modEdges]}
       nodeTypes={nodeTypes}
       onNodesChange={onNodesChange}
+      onConnect={onConnect}
+      onEdgesDelete={onEdgesDelete}
       minZoom={0.2}
       maxZoom={1.75}
       fitView
@@ -254,7 +279,7 @@ function StageNode({ data }) {
   const status = ctx.stageStatus(data.key);
   const open = ctx.expanded.has(data.key);
   return (
-    <div className={`gnode ${open ? "open" : ""} ${status}`}>
+    <div className={`gnode stage-${data.key} ${open ? "open" : ""} ${status}`}>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
       <div className="gnode-head" title="Перетащи за шапку">
@@ -332,8 +357,9 @@ function ModifierBody({ m, meta }) {
       <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)}
         placeholder={"напр. " + meta.ph} />
       {meta.hint && <p className="hint">Сгенерит: {meta.hint}.</p>}
-      <label className="el-label">Подключить к этапу</label>
+      <label className="el-label">Подключить к этапу (или тяни ребро мышью)</label>
       <select value={target} onChange={(e) => setTarget(e.target.value)}>
+        <option value="none">— не подключено —</option>
         <option value="style">Визуал-стиль</option>
         <option value="storyboard">Раскадровка</option>
         <option value="both">Оба</option>
@@ -468,43 +494,39 @@ function StageBody({ k }) {
         <button disabled={busy} onClick={() => c.run("storyboard", () => api.generateStoryboard(project.id))}>
           {busy === "storyboard" ? "…" : "↻ Пересобрать раскадровку"}
         </button>
-        {project.scenes.map((sc) => (
-          <div key={sc.id} className="sb-scene">
-            {sc.shots?.length > 0 && <div className="sb-scene-title">Сцена {sc.order}</div>}
-            <div className="shots">
-              {(sc.shots || []).map((sh) => (
-                <div key={sh.id} className={`shot ${sh.status}`}>
-                  <div className="shot-media">
-                    {sh.frame_url ? <img src={sh.frame_url} alt="" /> : <div className="ph">кадр не сгенерирован</div>}
-                    <span className="dur">{sh.duration}с</span>
-                  </div>
-                  <div className="shot-body">
-                    {c.editKey === "shot:" + sh.id ? (
-                      <EditBox initial={sh.description} busy={busy === "edit"} onCancel={() => c.setEditKey(null)}
-                        onSave={(val) => c.commitEdit(() => api.patchShot(sh.id, { description: val }))} />
-                    ) : (
-                      <>
-                        <p className="shot-desc">{sh.description}</p>
-                        <div className="shot-meta"><span>🎥 {sh.camera}</span><span>💡 {sh.lighting}</span></div>
-                        <div className="row">
-                          <button disabled={busy} onClick={() => c.run("frame:" + sh.id, async () => { await api.generateFrame(sh.id); return api.getProject(project.id); })}>
-                            {busy === "frame:" + sh.id ? "…" : sh.frame_url ? "↻ Кадр" : "Кадр"}
-                          </button>
-                          <button onClick={() => c.startEdit("shot:" + sh.id)}>✎</button>
-                          <button onClick={() => c.run("shot", async () => { await api.decideShot(sh.id, "approve"); return api.getProject(project.id); })}>✓</button>
-                          <button onClick={() => c.run("shot", async () => { await api.decideShot(sh.id, "reject"); return api.getProject(project.id); })}>✕</button>
-                          <button className={c.openShot === sh.id ? "primary" : ""}
-                            onClick={() => c.setOpenShot(c.openShot === sh.id ? null : sh.id)}>⚙ Элементы</button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                  {c.openShot === sh.id && <ShotEditor shot={sh} />}
-                </div>
-              ))}
+        <div className="shots-strip">
+          {project.scenes.flatMap((sc) => (sc.shots || []).map((sh, i) => (
+            <div key={sh.id} className={`shot ${sh.status}`}>
+              {i === 0 && <div className="strip-scene">Сцена {sc.order}</div>}
+              <div className="shot-media">
+                {sh.frame_url ? <img src={sh.frame_url} alt="" /> : <div className="ph">кадр не сгенерирован</div>}
+                <span className="dur">{sh.duration}с</span>
+              </div>
+              <div className="shot-body">
+                {c.editKey === "shot:" + sh.id ? (
+                  <EditBox initial={sh.description} busy={busy === "edit"} onCancel={() => c.setEditKey(null)}
+                    onSave={(val) => c.commitEdit(() => api.patchShot(sh.id, { description: val }))} />
+                ) : (
+                  <>
+                    <p className="shot-desc">{sh.description}</p>
+                    <div className="shot-meta"><span>🎥 {sh.camera}</span><span>💡 {sh.lighting}</span></div>
+                    <div className="row">
+                      <button disabled={busy} onClick={() => c.run("frame:" + sh.id, async () => { await api.generateFrame(sh.id); return api.getProject(project.id); })}>
+                        {busy === "frame:" + sh.id ? "…" : sh.frame_url ? "↻ Кадр" : "Кадр"}
+                      </button>
+                      <button onClick={() => c.startEdit("shot:" + sh.id)}>✎</button>
+                      <button onClick={() => c.run("shot", async () => { await api.decideShot(sh.id, "approve"); return api.getProject(project.id); })}>✓</button>
+                      <button onClick={() => c.run("shot", async () => { await api.decideShot(sh.id, "reject"); return api.getProject(project.id); })}>✕</button>
+                      <button className={c.openShot === sh.id ? "primary" : ""}
+                        onClick={() => c.setOpenShot(c.openShot === sh.id ? null : sh.id)}>⚙</button>
+                    </div>
+                  </>
+                )}
+              </div>
+              {c.openShot === sh.id && <ShotEditor shot={sh} />}
             </div>
-          </div>
-        ))}
+          )))}
+        </div>
       </>
     )
   );
