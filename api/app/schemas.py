@@ -45,6 +45,19 @@ class ConceptEdit(BaseModel):
     prompt: str
 
 
+class ModifierIn(BaseModel):
+    kind: str = "style"
+    target_stage: str = "storyboard"
+
+
+class ModifierPatch(BaseModel):
+    reference_text: str | None = None
+    target_stage: str | None = None
+    enabled: bool | None = None
+    pos_x: float | None = None
+    pos_y: float | None = None
+
+
 class StageSettingIn(BaseModel):
     provider: str = ""
     api_key: str = ""

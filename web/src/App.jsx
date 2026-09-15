@@ -1,6 +1,6 @@
 import { Fragment, createContext, useContext, useEffect, useRef, useState } from "react";
 import ReactFlow, {
-  Background, Controls, Handle, Position, ReactFlowProvider, useEdgesState, useNodesState,
+  Background, Controls, Handle, Position, ReactFlowProvider, useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { api } from "./api";
@@ -11,13 +11,12 @@ const STAGE_LABEL = {
   storyboard: "Раскадровка", shots: "Шоты", assembly: "Сборка",
 };
 const BRANCH = [
-  { key: "idea", n: 1, title: "Идея" },
-  { key: "script", n: 2, title: "Сценарий" },
-  { key: "style", n: 3, title: "Визуал-стиль" },
-  { key: "storyboard", n: 4, title: "Раскадровка + шоты" },
-  { key: "assembly", n: 5, title: "Сборка" },
+  { key: "script", n: 1, title: "Идея + Сценарий" },
+  { key: "style", n: 2, title: "Визуал-стиль" },
+  { key: "storyboard", n: 3, title: "Раскадровка + шоты" },
+  { key: "assembly", n: 4, title: "Сборка" },
 ];
-const stageKey = (s) => (s === "shots" ? "storyboard" : s);
+const stageKey = (s) => (s === "shots" ? "storyboard" : s === "idea" ? "script" : s);
 
 const PC = createContext(null);
 
@@ -77,14 +76,23 @@ function ProjectView({ project, onChange, afterChange }) {
   const [editKey, setEditKey] = useState(null);
   const [expanded, setExpanded] = useState(() => new Set([stageKey(project.stage)]));
   const [showSettings, setShowSettings] = useState(false);
+  const [modifiers, setModifiers] = useState([]);
 
+  const reloadModifiers = () => api.listModifiers(project.id).then(setModifiers).catch(() => {});
   useEffect(() => {
     setExpanded(new Set([stageKey(project.stage)]));
+    reloadModifiers();
   }, [project.id]);
   useEffect(() => {
     api.getVoices().then(setVoices).catch(() => {});
     api.getCameraPresets().then(setPresets).catch(() => {});
   }, []);
+
+  const addStyleNode = async () => {
+    const m = await api.createModifier(project.id, "style", "storyboard");
+    await reloadModifiers();
+    setExpanded((prev) => new Set(prev).add(m.id));
+  };
 
   const run = async (label, fn) => {
     setBusy(label);
@@ -128,7 +136,7 @@ function ProjectView({ project, onChange, afterChange }) {
     project, onChange, busy, voices, presets,
     openShot, setOpenShot, editKey, setEditKey,
     startEdit, commitEdit, run, shotsCount, stageStatus,
-    expanded, toggleExpand,
+    expanded, toggleExpand, modifiers, reloadModifiers,
   };
 
   return (
@@ -137,6 +145,7 @@ function ProjectView({ project, onChange, afterChange }) {
         <div className="canvas-top">
           <h2 className="pname">{project.title}</h2>
           <div className="canvas-actions">
+            <button onClick={addStyleNode}>+ Узел «Стиль»</button>
             <span className="cost">≈ ${project.cost_usd ?? 0} · API</span>
             <button onClick={() => setShowSettings(true)}>⚙ Настройки</button>
           </div>
@@ -152,25 +161,42 @@ function ProjectView({ project, onChange, afterChange }) {
   );
 }
 
-const nodeTypes = { stage: StageNode };
+const nodeTypes = { stage: StageNode, style: StyleNode };
 
 function Board({ project }) {
+  const ctx = useContext(PC);
+  const modifiers = ctx.modifiers;
   const posKey = "vs_pos_" + project.id;
   const saved = (() => {
     try { return JSON.parse(localStorage.getItem(posKey)) || {}; } catch { return {}; }
   })();
-  const [nodes, , onNodesChange] = useNodesState(
-    BRANCH.map((st, i) => ({
-      id: st.key,
-      type: "stage",
-      position: saved[st.key] || { x: i * 300, y: 60 },
-      data: { key: st.key, n: st.n, title: st.title },
-      dragHandle: ".gnode-head",
-    }))
-  );
-  const [edges] = useEdgesState(
-    BRANCH.slice(1).map((st, i) => ({ id: "e" + i, source: BRANCH[i].key, target: st.key }))
-  );
+
+  const stageNode = (st, i) => ({
+    id: st.key, type: "stage",
+    position: saved[st.key] || { x: i * 300, y: 60 },
+    data: { key: st.key, n: st.n, title: st.title },
+    dragHandle: ".gnode-head",
+  });
+  const modNode = (m) => ({
+    id: m.id, type: "style",
+    position: saved[m.id] || { x: m.pos_x || 120, y: m.pos_y || 340 },
+    data: { id: m.id },
+    dragHandle: ".gnode-head",
+  });
+
+  const [nodes, setNodes, onNodesChange] = useNodesState([
+    ...BRANCH.map(stageNode), ...modifiers.map(modNode),
+  ]);
+
+  const modIds = modifiers.map((m) => m.id).join(",");
+  useEffect(() => {
+    setNodes((cur) => {
+      const byId = Object.fromEntries(cur.map((n) => [n.id, n]));
+      const keepPos = (n) => (byId[n.id] ? { ...n, position: byId[n.id].position } : n);
+      return [...BRANCH.map(stageNode).map(keepPos), ...modifiers.map(modNode).map(keepPos)];
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modIds]);
 
   useEffect(() => {
     const pos = {};
@@ -178,10 +204,16 @@ function Board({ project }) {
     try { localStorage.setItem(posKey, JSON.stringify(pos)); } catch { /* ignore */ }
   }, [nodes, posKey]);
 
+  const stageEdges = BRANCH.slice(1).map((st, i) => ({ id: "e" + i, source: BRANCH[i].key, target: st.key }));
+  const targetsFor = (m) => (m.target_stage === "both" ? ["style", "storyboard"] : [m.target_stage]);
+  const modEdges = modifiers.flatMap((m) => targetsFor(m).map((t) => ({
+    id: "m" + m.id + t, source: m.id, target: t, animated: true, style: { stroke: "#a78bfa" },
+  })));
+
   return (
     <ReactFlow
       nodes={nodes}
-      edges={edges}
+      edges={[...stageEdges, ...modEdges]}
       nodeTypes={nodeTypes}
       onNodesChange={onNodesChange}
       minZoom={0.2}
@@ -220,14 +252,85 @@ function StageNode({ data }) {
   );
 }
 
+function StyleNode({ data }) {
+  const ctx = useContext(PC);
+  const m = ctx.modifiers.find((x) => x.id === data.id);
+  const open = ctx.expanded.has(data.id);
+  if (!m) return null;
+  return (
+    <div className={`gnode style ${open ? "open" : ""} ${m.enabled ? "on" : "off"}`}>
+      <Handle type="source" position={Position.Right} />
+      <div className="gnode-head" title="Перетащи за шапку">
+        <span className="gnode-grip">⠿</span>
+        <span className="gnode-badge">🎨</span>
+        <span className="gnode-title">Стиль{m.enabled ? "" : " (выкл)"}</span>
+        <button className="gnode-toggle nodrag" onClick={() => ctx.toggleExpand(data.id)}>
+          {open ? "▾" : "▸"}
+        </button>
+      </div>
+      {open && <div className="gnode-body nodrag"><StyleBody m={m} /></div>}
+    </div>
+  );
+}
+
+function StyleBody({ m }) {
+  const { reloadModifiers } = useContext(PC);
+  const [text, setText] = useState(m.reference_text || "");
+  const [target, setTarget] = useState(m.target_stage || "storyboard");
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef(null);
+
+  const save = async () => {
+    setBusy(true);
+    try { await api.patchModifier(m.id, { reference_text: text, target_stage: target }); await reloadModifiers(); }
+    catch (e) { alert(e.message); } finally { setBusy(false); }
+  };
+  const toggle = async () => { await api.patchModifier(m.id, { enabled: !m.enabled }); reloadModifiers(); };
+  const onFile = async (e) => {
+    const f = e.target.files?.[0]; if (!f) return;
+    setBusy(true);
+    try { await api.uploadReference(m.id, f); await reloadModifiers(); }
+    catch (err) { alert(err.message); } finally { setBusy(false); e.target.value = ""; }
+  };
+  const del = async () => {
+    if (confirm("Удалить узел «Стиль»?")) { await api.deleteModifier(m.id); reloadModifiers(); }
+  };
+
+  return (
+    <>
+      <label className="el-label">Референс стиля (текст, EN)</label>
+      <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)}
+        placeholder="напр. cinematic 3D, pixar-like, warm palette, soft rim light" />
+      <label className="el-label">Применять к этапу</label>
+      <select value={target} onChange={(e) => setTarget(e.target.value)}>
+        <option value="style">Визуал-стиль</option>
+        <option value="storyboard">Раскадровка</option>
+        <option value="both">Оба</option>
+      </select>
+      {m.refs?.length > 0 && (
+        <div className="refs">{m.refs.map((u, i) => <img key={i} src={u} alt="ref" />)}</div>
+      )}
+      <div className="row">
+        <button disabled={busy} onClick={() => fileRef.current?.click()}>📎 Референс</button>
+        <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
+        <button className="primary" disabled={busy} onClick={save}>{busy ? "…" : "Сохранить"}</button>
+      </div>
+      <div className="row">
+        <button onClick={toggle}>{m.enabled ? "Выключить" : "Включить"}</button>
+        <button onClick={del}>🗑 Удалить</button>
+      </div>
+    </>
+  );
+}
+
 function StageBody({ k }) {
   const c = useContext(PC);
   const { project, busy } = c;
 
-  if (k === "idea") return <IdeaPanel />;
-
   if (k === "script") return (
     <>
+      <IdeaPanel />
+      <div className="stage-sep" />
       {project.logline && <p className="logline">«{project.logline}»</p>}
       <button className="primary" disabled={!project.brief_text || busy}
         onClick={() => c.run("script", () => api.generateScript(project.id))}>

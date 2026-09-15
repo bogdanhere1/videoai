@@ -31,6 +31,25 @@ export const api = {
     }).then(j),
   assembleProject: (id) =>
     fetch(`/api/projects/${id}/assemble`, { method: "POST" }).then(j),
+  listModifiers: (id) => fetch(`/api/projects/${id}/modifiers`).then(j),
+  createModifier: (id, kind = "style", target_stage = "storyboard") =>
+    fetch(`/api/projects/${id}/modifiers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind, target_stage }),
+    }).then(j),
+  patchModifier: (mid, patch) =>
+    fetch(`/api/modifiers/${mid}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then(j),
+  uploadReference: (mid, file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetch(`/api/modifiers/${mid}/reference`, { method: "POST", body: fd }).then(j);
+  },
+  deleteModifier: (mid) => fetch(`/api/modifiers/${mid}`, { method: "DELETE" }).then(j),
   getSettings: (id) => fetch(`/api/projects/${id}/settings`).then(j),
   putSetting: (id, stage, cfg) =>
     fetch(`/api/projects/${id}/settings/${stage}`, {

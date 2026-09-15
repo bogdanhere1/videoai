@@ -151,6 +151,20 @@ class StageSetting(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class Modifier(Base):
+    """Узел-модификатор на доске (напр. «Стиль»), подключаемый к этапу-генератору."""
+    __tablename__ = "modifiers"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    kind: Mapped[str] = mapped_column(String, default="style")
+    target_stage: Mapped[str] = mapped_column(String, default="storyboard")  # style|storyboard|both
+    reference_text: Mapped[str] = mapped_column(Text, default="")
+    refs_json: Mapped[list] = mapped_column(JSON, default=list)   # список URL картинок-референсов
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    pos_x: Mapped[float] = mapped_column(Float, default=0.0)
+    pos_y: Mapped[float] = mapped_column(Float, default=0.0)
+
+
 class Job(Base):
     __tablename__ = "jobs"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)

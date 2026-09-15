@@ -15,15 +15,15 @@ from . import agent, assembly, storage
 from .config import settings
 from .db import Base, engine, get_db
 from .models import (
-    Approval, Asset, AssetType, Job, JobStatus, Project, Scene, Shot, Stage,
+    Approval, Asset, AssetType, Job, JobStatus, Modifier, Project, Scene, Shot, Stage,
     StageSetting, Status,
 )
 from .presets import CAMERA_PRESETS
 from .providers import elevenlabs as el
 from .providers import get_video_provider
 from .schemas import (
-    ApprovalIn, ConceptEdit, IdeaIn, SceneEdit, ScriptDraft, ScriptReviseIn, ShotPatch,
-    StageSettingIn, TranscriptOut,
+    ApprovalIn, ConceptEdit, IdeaIn, ModifierIn, ModifierPatch, SceneEdit, ScriptDraft,
+    ScriptReviseIn, ShotPatch, StageSettingIn, TranscriptOut,
 )
 
 STAGE_KEYS = ["idea", "script", "style", "storyboard", "shots", "assembly"]
@@ -169,7 +169,7 @@ def generate_concept(asset_id: str, db: Session = Depends(get_db)):
     asset = db.get(Asset, asset_id)
     if not asset or asset.type != AssetType.concept:
         raise HTTPException(404, "Концепт не найден")
-    prompt = (asset.params_json or {}).get("prompt", "")
+    prompt = _style_prefix(db, asset.project_id, "style") + (asset.params_json or {}).get("prompt", "")
     try:
         res = get_video_provider().generate_image(prompt)
     except Exception as e:
@@ -230,7 +230,8 @@ def generate_frame(shot_id: str, db: Session = Depends(get_db)):
     shot = db.get(Shot, shot_id)
     if not shot:
         raise HTTPException(404, "Шот не найден")
-    prompt = (shot.camera_json or {}).get("frame_prompt") or shot.description
+    base = (shot.camera_json or {}).get("frame_prompt") or shot.description
+    prompt = _style_prefix(db, _shot_project_id(shot), "storyboard") + base
     try:
         res = get_video_provider().generate_image(prompt)
     except Exception as e:
@@ -421,6 +422,78 @@ def put_setting(project_id: str, stage: str, body: StageSettingIn, db: Session =
     row.base_url, row.model, row.enabled = body.base_url, body.model, body.enabled
     db.commit()
     return {"stage": stage, "enabled": row.enabled, "provider": row.provider}
+
+
+# ---------- Узлы-модификаторы (напр. «Стиль») ----------
+def _modifier_dto(m: Modifier) -> dict:
+    return {
+        "id": m.id, "kind": m.kind, "target_stage": m.target_stage,
+        "reference_text": m.reference_text, "refs": m.refs_json or [],
+        "enabled": m.enabled, "pos_x": m.pos_x, "pos_y": m.pos_y,
+    }
+
+
+def _style_prefix(db: Session, project_id: str, stage: str) -> str:
+    """Собирает текст стиля из включённых узлов «Стиль», нацеленных на этап."""
+    mods = db.query(Modifier).filter(
+        Modifier.project_id == project_id, Modifier.kind == "style", Modifier.enabled == True  # noqa: E712
+    ).all()
+    parts = [m.reference_text.strip() for m in mods
+             if m.reference_text.strip() and m.target_stage in (stage, "both")]
+    return ("Style reference: " + " | ".join(parts) + ". ") if parts else ""
+
+
+@app.get("/api/projects/{project_id}/modifiers")
+def list_modifiers(project_id: str, db: Session = Depends(get_db)):
+    _get_project(db, project_id)
+    rows = db.query(Modifier).filter(Modifier.project_id == project_id).all()
+    return [_modifier_dto(m) for m in rows]
+
+
+@app.post("/api/projects/{project_id}/modifiers")
+def create_modifier(project_id: str, body: ModifierIn, db: Session = Depends(get_db)):
+    _get_project(db, project_id)
+    m = Modifier(project_id=project_id, kind=body.kind, target_stage=body.target_stage,
+                 pos_x=120.0, pos_y=320.0)
+    db.add(m)
+    db.commit()
+    db.refresh(m)
+    return _modifier_dto(m)
+
+
+@app.patch("/api/modifiers/{mid}")
+def patch_modifier(mid: str, body: ModifierPatch, db: Session = Depends(get_db)):
+    m = db.get(Modifier, mid)
+    if not m:
+        raise HTTPException(404, "Узел не найден")
+    for field in ("reference_text", "target_stage", "enabled", "pos_x", "pos_y"):
+        val = getattr(body, field)
+        if val is not None:
+            setattr(m, field, val)
+    db.commit()
+    return _modifier_dto(m)
+
+
+@app.post("/api/modifiers/{mid}/reference")
+async def upload_reference(mid: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    m = db.get(Modifier, mid)
+    if not m:
+        raise HTTPException(404, "Узел не найден")
+    data = await file.read()
+    ext = os.path.splitext(file.filename or "ref.png")[1] or ".png"
+    url = storage.save_bytes(data, ext)
+    m.refs_json = list(m.refs_json or []) + [url]
+    db.commit()
+    return _modifier_dto(m)
+
+
+@app.delete("/api/modifiers/{mid}")
+def delete_modifier(mid: str, db: Session = Depends(get_db)):
+    m = db.get(Modifier, mid)
+    if m:
+        db.delete(m)
+        db.commit()
+    return {"ok": True}
 
 
 # ---------- Стадия 6: сборка ----------
