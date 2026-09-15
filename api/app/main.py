@@ -433,8 +433,13 @@ def _modifier_dto(m: Modifier) -> dict:
     }
 
 
-def _style_prefix(db: Session, project_id: str, stage: str, kinds=("style", "character")) -> str:
-    """Собирает текст из включённых узлов-модификаторов (Стиль/Персонаж) для этапа."""
+MOD_LABEL = {"style": "Style", "character": "Character", "camera": "Camera",
+             "light": "Lighting", "location": "Location"}
+ALL_MOD_KINDS = tuple(MOD_LABEL.keys())
+
+
+def _style_prefix(db: Session, project_id: str, stage: str, kinds=ALL_MOD_KINDS) -> str:
+    """Собирает текст из включённых узлов-модификаторов для этапа."""
     mods = db.query(Modifier).filter(
         Modifier.project_id == project_id, Modifier.kind.in_(kinds),
         Modifier.enabled == True,  # noqa: E712
@@ -444,8 +449,38 @@ def _style_prefix(db: Session, project_id: str, stage: str, kinds=("style", "cha
         t = (m.reference_text or "").strip()
         if not t or m.target_stage not in (stage, "both"):
             continue
-        parts.append(("Character: " if m.kind == "character" else "Style: ") + t)
+        parts.append(f"{MOD_LABEL.get(m.kind, 'Ref')}: {t}")
     return (" | ".join(parts) + ". ") if parts else ""
+
+
+def _view_prompts(kind: str, desc: str, style: str) -> list[tuple[str, str]]:
+    """Специализированные промпты «видов» для узлов-генераторов."""
+    if kind == "character":
+        return [
+            ("Тело · фронт (без головы)",
+             f"{style}full body character reference sheet of {desc}, cropped at the neck, "
+             f"headless, no head visible, detailed outfit and footwear, standing neutral A-pose, "
+             f"plain light-grey studio backdrop, sharp high detail, photoreal"),
+            ("Тело · 3/4 (без головы)",
+             f"{style}full body character reference of {desc}, three-quarter view, cropped at the "
+             f"neck, headless, no head visible, detailed clothing, plain studio backdrop, high detail"),
+            ("Лицо · крупный план",
+             f"{style}extreme close-up beauty portrait, only the head and face of {desc}, highly "
+             f"detailed facial features and skin texture, sharp focus, front view, soft studio "
+             f"lighting, plain background"),
+        ]
+    if kind == "location":
+        return [
+            ("Общий план",
+             f"{style}wide establishing shot of {desc}, no people, empty scene, cinematic, "
+             f"detailed environment, natural lighting, high detail"),
+            ("Другой ракурс",
+             f"{style}{desc}, alternate wide angle, no people, detailed environment, depth"),
+            ("Деталь · атмосфера",
+             f"{style}atmospheric detail shot inside {desc}, close-up on textures and props, "
+             f"no people, moody lighting, shallow depth of field"),
+        ]
+    return []
 
 
 @app.get("/api/projects/{project_id}/modifiers")
@@ -458,8 +493,9 @@ def list_modifiers(project_id: str, db: Session = Depends(get_db)):
 @app.post("/api/projects/{project_id}/modifiers")
 def create_modifier(project_id: str, body: ModifierIn, db: Session = Depends(get_db)):
     _get_project(db, project_id)
+    n = db.query(Modifier).filter(Modifier.project_id == project_id).count()
     m = Modifier(project_id=project_id, kind=body.kind, target_stage=body.target_stage,
-                 pos_x=120.0, pos_y=320.0)
+                 pos_x=120.0 + (n % 4) * 300.0, pos_y=360.0 + (n // 4) * 220.0)
     db.add(m)
     db.commit()
     db.refresh(m)
@@ -492,30 +528,19 @@ async def upload_reference(mid: str, file: UploadFile = File(...), db: Session =
     return _modifier_dto(m)
 
 
-@app.post("/api/modifiers/{mid}/character:generate")
-def generate_character_views(mid: str, db: Session = Depends(get_db)):
-    """Генерит набор видов персонажа: тело БЕЗ головы (для позы/одежды) + крупный
-    детальный план лица (чтобы не тащить низкодетальное лицо на общем плане)."""
+@app.post("/api/modifiers/{mid}/views:generate")
+def generate_modifier_views(mid: str, db: Session = Depends(get_db)):
+    """Генерит набор «видов» для узлов-генераторов (Персонаж/Локация)."""
     m = db.get(Modifier, mid)
-    if not m or m.kind != "character":
-        raise HTTPException(404, "Узел-персонаж не найден")
+    if not m:
+        raise HTTPException(404, "Узел не найден")
     desc = (m.reference_text or "").strip()
     if not desc:
-        raise HTTPException(400, "Опиши персонажа в референс-тексте")
-    style = _style_prefix(db, m.project_id, "storyboard", kinds=("style",))
-    views = [
-        ("Тело · фронт (без головы)",
-         f"{style}full body character reference sheet of {desc}, cropped at the neck, "
-         f"headless, no head visible, detailed outfit and footwear, standing neutral A-pose, "
-         f"plain light-grey studio backdrop, sharp high detail, photoreal"),
-        ("Тело · 3/4 (без головы)",
-         f"{style}full body character reference of {desc}, three-quarter view, cropped at the "
-         f"neck, headless, no head visible, detailed clothing, plain studio backdrop, high detail"),
-        ("Лицо · крупный план",
-         f"{style}extreme close-up beauty portrait, only the head and face of {desc}, highly "
-         f"detailed facial features and skin texture, sharp focus, front view, soft studio "
-         f"lighting, plain background"),
-    ]
+        raise HTTPException(400, "Заполни описание (референс-текст)")
+    style = _style_prefix(db, m.project_id, "storyboard", kinds=("style", "camera", "light"))
+    views = _view_prompts(m.kind, desc, style)
+    if not views:
+        raise HTTPException(400, "У этого узла нет генерации видов")
     provider = get_video_provider()
     out = list(m.refs_json or [])
     added, errors = 0, []

@@ -50,8 +50,8 @@ export const api = {
     return fetch(`/api/modifiers/${mid}/reference`, { method: "POST", body: fd }).then(j);
   },
   deleteModifier: (mid) => fetch(`/api/modifiers/${mid}`, { method: "DELETE" }).then(j),
-  generateCharacter: (mid) =>
-    fetch(`/api/modifiers/${mid}/character:generate`, { method: "POST" }).then(j),
+  generateViews: (mid) =>
+    fetch(`/api/modifiers/${mid}/views:generate`, { method: "POST" }).then(j),
   getSettings: (id) => fetch(`/api/projects/${id}/settings`).then(j),
   putSetting: (id, stage, cfg) =>
     fetch(`/api/projects/${id}/settings/${stage}`, {

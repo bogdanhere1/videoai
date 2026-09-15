@@ -18,6 +18,20 @@ const BRANCH = [
 ];
 const stageKey = (s) => (s === "shots" ? "storyboard" : s === "idea" ? "script" : s);
 const refUrl = (r) => (typeof r === "string" ? r : r?.url);
+const MOD_META = {
+  style: { icon: "🎨", title: "Стиль", accent: "style", upload: true, gen: false,
+    ph: "cinematic 3D, pixar-like, warm palette, soft rim light" },
+  character: { icon: "🧍", title: "Персонаж", accent: "character", upload: false, gen: true,
+    ph: "young female barista, red apron, freckles, curly auburn hair",
+    hint: "тело без головы (2 ракурса) + крупный детальный портрет лица — чтобы лицо не «мылилось»" },
+  location: { icon: "🏙", title: "Локация", accent: "location", upload: false, gen: true,
+    ph: "cozy modern cafe interior, morning light, plants",
+    hint: "общий план + другой ракурс + деталь/атмосфера (без людей)" },
+  camera: { icon: "🎥", title: "Камера", accent: "camera", upload: false, gen: false,
+    ph: "35mm lens, low angle, shallow depth of field, slow dolly in" },
+  light: { icon: "💡", title: "Свет", accent: "light", upload: false, gen: false,
+    ph: "golden hour, soft rim light, moody, high contrast" },
+};
 
 const PC = createContext(null);
 
@@ -148,6 +162,9 @@ function ProjectView({ project, onChange, afterChange }) {
           <div className="canvas-actions">
             <button onClick={() => addModifierNode("style")}>+ Стиль</button>
             <button onClick={() => addModifierNode("character")}>+ Персонаж</button>
+            <button onClick={() => addModifierNode("location")}>+ Локация</button>
+            <button onClick={() => addModifierNode("camera")}>+ Камера</button>
+            <button onClick={() => addModifierNode("light")}>+ Свет</button>
             <span className="cost">≈ ${project.cost_usd ?? 0} · API</span>
             <button onClick={() => setShowSettings(true)}>⚙ Настройки</button>
           </div>
@@ -163,7 +180,10 @@ function ProjectView({ project, onChange, afterChange }) {
   );
 }
 
-const nodeTypes = { stage: StageNode, style: StyleNode, character: CharacterNode };
+const nodeTypes = {
+  stage: StageNode, style: ModifierNode, character: ModifierNode,
+  camera: ModifierNode, light: ModifierNode, location: ModifierNode,
+};
 
 function Board({ project }) {
   const ctx = useContext(PC);
@@ -180,7 +200,7 @@ function Board({ project }) {
     dragHandle: ".gnode-head",
   });
   const modNode = (m) => ({
-    id: m.id, type: m.kind === "character" ? "character" : "style",
+    id: m.id, type: MOD_META[m.kind] ? m.kind : "style",
     position: saved[m.id] || { x: m.pos_x || 120, y: m.pos_y || 340 },
     data: { id: m.id },
     dragHandle: ".gnode-head",
@@ -254,132 +274,64 @@ function StageNode({ data }) {
   );
 }
 
-function StyleNode({ data }) {
+function ModifierNode({ data }) {
   const ctx = useContext(PC);
   const m = ctx.modifiers.find((x) => x.id === data.id);
   const open = ctx.expanded.has(data.id);
   if (!m) return null;
+  const meta = MOD_META[m.kind] || MOD_META.style;
   return (
-    <div className={`gnode style ${open ? "open" : ""} ${m.enabled ? "on" : "off"}`}>
+    <div className={`gnode ${meta.accent} ${open ? "open" : ""} ${m.enabled ? "on" : "off"}`}>
       <Handle type="source" position={Position.Right} />
       <div className="gnode-head" title="Перетащи за шапку">
         <span className="gnode-grip">⠿</span>
-        <span className="gnode-badge">🎨</span>
-        <span className="gnode-title">Стиль{m.enabled ? "" : " (выкл)"}</span>
+        <span className="gnode-badge">{meta.icon}</span>
+        <span className="gnode-title">{meta.title}{m.enabled ? "" : " (выкл)"}</span>
         <button className="gnode-toggle nodrag" onClick={() => ctx.toggleExpand(data.id)}>
           {open ? "▾" : "▸"}
         </button>
       </div>
-      {open && <div className="gnode-body nodrag"><StyleBody m={m} /></div>}
+      {open && <div className="gnode-body nodrag"><ModifierBody m={m} meta={meta} /></div>}
     </div>
   );
 }
 
-function StyleBody({ m }) {
-  const { reloadModifiers } = useContext(PC);
-  const [text, setText] = useState(m.reference_text || "");
-  const [target, setTarget] = useState(m.target_stage || "storyboard");
-  const [busy, setBusy] = useState(false);
-  const fileRef = useRef(null);
-
-  const save = async () => {
-    setBusy(true);
-    try { await api.patchModifier(m.id, { reference_text: text, target_stage: target }); await reloadModifiers(); }
-    catch (e) { alert(e.message); } finally { setBusy(false); }
-  };
-  const toggle = async () => { await api.patchModifier(m.id, { enabled: !m.enabled }); reloadModifiers(); };
-  const onFile = async (e) => {
-    const f = e.target.files?.[0]; if (!f) return;
-    setBusy(true);
-    try { await api.uploadReference(m.id, f); await reloadModifiers(); }
-    catch (err) { alert(err.message); } finally { setBusy(false); e.target.value = ""; }
-  };
-  const del = async () => {
-    if (confirm("Удалить узел «Стиль»?")) { await api.deleteModifier(m.id); reloadModifiers(); }
-  };
-
-  return (
-    <>
-      <label className="el-label">Референс стиля (текст, EN)</label>
-      <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)}
-        placeholder="напр. cinematic 3D, pixar-like, warm palette, soft rim light" />
-      <label className="el-label">Применять к этапу</label>
-      <select value={target} onChange={(e) => setTarget(e.target.value)}>
-        <option value="style">Визуал-стиль</option>
-        <option value="storyboard">Раскадровка</option>
-        <option value="both">Оба</option>
-      </select>
-      {m.refs?.length > 0 && (
-        <div className="refs">{m.refs.map((u, i) => <img key={i} src={refUrl(u)} alt="ref" />)}</div>
-      )}
-      <div className="row">
-        <button disabled={busy} onClick={() => fileRef.current?.click()}>📎 Референс</button>
-        <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
-        <button className="primary" disabled={busy} onClick={save}>{busy ? "…" : "Сохранить"}</button>
-      </div>
-      <div className="row">
-        <button onClick={toggle}>{m.enabled ? "Выключить" : "Включить"}</button>
-        <button onClick={del}>🗑 Удалить</button>
-      </div>
-    </>
-  );
-}
-
-function CharacterNode({ data }) {
-  const ctx = useContext(PC);
-  const m = ctx.modifiers.find((x) => x.id === data.id);
-  const open = ctx.expanded.has(data.id);
-  if (!m) return null;
-  return (
-    <div className={`gnode character ${open ? "open" : ""} ${m.enabled ? "on" : "off"}`}>
-      <Handle type="source" position={Position.Right} />
-      <div className="gnode-head" title="Перетащи за шапку">
-        <span className="gnode-grip">⠿</span>
-        <span className="gnode-badge">🧍</span>
-        <span className="gnode-title">Персонаж{m.enabled ? "" : " (выкл)"}</span>
-        <button className="gnode-toggle nodrag" onClick={() => ctx.toggleExpand(data.id)}>
-          {open ? "▾" : "▸"}
-        </button>
-      </div>
-      {open && <div className="gnode-body nodrag"><CharacterBody m={m} /></div>}
-    </div>
-  );
-}
-
-function CharacterBody({ m }) {
+function ModifierBody({ m, meta }) {
   const { reloadModifiers } = useContext(PC);
   const [text, setText] = useState(m.reference_text || "");
   const [target, setTarget] = useState(m.target_stage || "storyboard");
   const [busy, setBusy] = useState("");
+  const fileRef = useRef(null);
   const views = (m.refs || []).filter((r) => typeof r === "object");
+  const flat = (m.refs || []).filter((r) => typeof r === "string");
 
+  const persist = () => api.patchModifier(m.id, { reference_text: text, target_stage: target });
   const save = async () => {
     setBusy("save");
-    try { await api.patchModifier(m.id, { reference_text: text, target_stage: target }); await reloadModifiers(); }
-    catch (e) { alert(e.message); } finally { setBusy(""); }
+    try { await persist(); await reloadModifiers(); } catch (e) { alert(e.message); } finally { setBusy(""); }
   };
   const gen = async () => {
     setBusy("gen");
-    try {
-      await api.patchModifier(m.id, { reference_text: text, target_stage: target });
-      await api.generateCharacter(m.id);
-      await reloadModifiers();
-    } catch (e) { alert("Генерация: " + e.message); } finally { setBusy(""); }
+    try { await persist(); await api.generateViews(m.id); await reloadModifiers(); }
+    catch (e) { alert("Генерация: " + e.message); } finally { setBusy(""); }
+  };
+  const onFile = async (e) => {
+    const f = e.target.files?.[0]; if (!f) return;
+    setBusy("up");
+    try { await api.uploadReference(m.id, f); await reloadModifiers(); }
+    catch (err) { alert(err.message); } finally { setBusy(""); e.target.value = ""; }
   };
   const toggle = async () => { await api.patchModifier(m.id, { enabled: !m.enabled }); reloadModifiers(); };
   const del = async () => {
-    if (confirm("Удалить узел «Персонаж»?")) { await api.deleteModifier(m.id); reloadModifiers(); }
+    if (confirm(`Удалить узел «${meta.title}»?`)) { await api.deleteModifier(m.id); reloadModifiers(); }
   };
 
   return (
     <>
-      <label className="el-label">Описание персонажа (EN)</label>
+      <label className="el-label">{meta.gen ? "Описание (EN)" : "Референс (текст, EN)"}</label>
       <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)}
-        placeholder="напр. young female barista, red apron, freckles, curly auburn hair" />
-      <p className="hint">
-        Сгенерит: тело <b>без головы</b> (2 ракурса) + <b>крупный детальный портрет лица</b> —
-        чтобы лицо не «мылилось» на общем плане.
-      </p>
+        placeholder={"напр. " + meta.ph} />
+      {meta.hint && <p className="hint">Сгенерит: {meta.hint}.</p>}
       <label className="el-label">Подключить к этапу</label>
       <select value={target} onChange={(e) => setTarget(e.target.value)}>
         <option value="style">Визуал-стиль</option>
@@ -393,11 +345,26 @@ function CharacterBody({ m }) {
           ))}
         </div>
       )}
+      {flat.length > 0 && (
+        <div className="refs">{flat.map((u, i) => <img key={i} src={refUrl(u)} alt="ref" />)}</div>
+      )}
       <div className="row">
-        <button className="primary" disabled={!!busy} onClick={gen}>
-          {busy === "gen" ? "Генерирую виды…" : "Сгенерировать виды"}
+        {meta.gen && (
+          <button className="primary" disabled={!!busy} onClick={gen}>
+            {busy === "gen" ? "Генерирую виды…" : "Сгенерировать виды"}
+          </button>
+        )}
+        {meta.upload && (
+          <>
+            <button disabled={!!busy} onClick={() => fileRef.current?.click()}>
+              {busy === "up" ? "…" : "📎 Референс"}
+            </button>
+            <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
+          </>
+        )}
+        <button className={meta.gen ? "" : "primary"} disabled={!!busy} onClick={save}>
+          {busy === "save" ? "…" : "Сохранить"}
         </button>
-        <button disabled={!!busy} onClick={save}>{busy === "save" ? "…" : "Сохранить"}</button>
       </div>
       <div className="row">
         <button onClick={toggle}>{m.enabled ? "Выключить" : "Включить"}</button>
