@@ -1,5 +1,7 @@
 import { Fragment, createContext, useContext, useEffect, useRef, useState } from "react";
-import ReactFlow, { Background, Controls, Handle, Position, ReactFlowProvider } from "reactflow";
+import ReactFlow, {
+  Background, Controls, Handle, Position, ReactFlowProvider, useEdgesState, useNodesState,
+} from "reactflow";
 import "reactflow/dist/style.css";
 import { api } from "./api";
 import SettingsDrawer from "./Settings.jsx";
@@ -140,7 +142,7 @@ function ProjectView({ project, onChange, afterChange }) {
           </div>
         </div>
         <ReactFlowProvider>
-          <Board />
+          <Board key={project.id} project={project} />
         </ReactFlowProvider>
         {showSettings && (
           <SettingsDrawer projectId={project.id} onClose={() => setShowSettings(false)} />
@@ -152,34 +154,29 @@ function ProjectView({ project, onChange, afterChange }) {
 
 const nodeTypes = { stage: StageNode };
 
-function Board() {
-  const ctx = useContext(PC);
-  const posKey = "vs_pos_" + ctx.project.id;
-  const [positions, setPositions] = useState(() => {
+function Board({ project }) {
+  const posKey = "vs_pos_" + project.id;
+  const saved = (() => {
     try { return JSON.parse(localStorage.getItem(posKey)) || {}; } catch { return {}; }
-  });
+  })();
+  const [nodes, , onNodesChange] = useNodesState(
+    BRANCH.map((st, i) => ({
+      id: st.key,
+      type: "stage",
+      position: saved[st.key] || { x: i * 300, y: 60 },
+      data: { key: st.key, n: st.n, title: st.title },
+      dragHandle: ".gnode-head",
+    }))
+  );
+  const [edges] = useEdgesState(
+    BRANCH.slice(1).map((st, i) => ({ id: "e" + i, source: BRANCH[i].key, target: st.key }))
+  );
+
   useEffect(() => {
-    try { localStorage.setItem(posKey, JSON.stringify(positions)); } catch { /* ignore */ }
-  }, [positions, posKey]);
-
-  const nodes = BRANCH.map((st, i) => ({
-    id: st.key,
-    type: "stage",
-    position: positions[st.key] || { x: i * 300, y: 60 },
-    data: { key: st.key, n: st.n, title: st.title },
-    dragHandle: ".gnode-head",
-  }));
-  const edges = BRANCH.slice(1).map((st, i) => ({
-    id: "e" + i, source: BRANCH[i].key, target: st.key, animated: false,
-  }));
-
-  const onNodesChange = (changes) => setPositions((prev) => {
-    const next = { ...prev };
-    changes.forEach((ch) => {
-      if (ch.type === "position" && ch.position) next[ch.id] = ch.position;
-    });
-    return next;
-  });
+    const pos = {};
+    nodes.forEach((n) => { pos[n.id] = n.position; });
+    try { localStorage.setItem(posKey, JSON.stringify(pos)); } catch { /* ignore */ }
+  }, [nodes, posKey]);
 
   return (
     <ReactFlow
