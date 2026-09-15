@@ -21,7 +21,8 @@ from .presets import CAMERA_PRESETS
 from .providers import elevenlabs as el
 from .providers import get_video_provider
 from .schemas import (
-    ApprovalIn, IdeaIn, SceneEdit, ScriptDraft, ScriptReviseIn, ShotPatch, TranscriptOut,
+    ApprovalIn, ConceptEdit, IdeaIn, SceneEdit, ScriptDraft, ScriptReviseIn, ShotPatch,
+    TranscriptOut,
 )
 
 os.makedirs(settings.media_dir, exist_ok=True)
@@ -147,6 +148,19 @@ def extract_visuals(project_id: str, db: Session = Depends(get_db)):
     return _project_dto(project, db)
 
 
+@app.patch("/api/concepts/{asset_id}")
+def edit_concept(asset_id: str, body: ConceptEdit, db: Session = Depends(get_db)):
+    """Ручная правка промпта концепта (перед генерацией)."""
+    asset = db.get(Asset, asset_id)
+    if not asset or asset.type != AssetType.concept:
+        raise HTTPException(404, "Концепт не найден")
+    p = dict(asset.params_json or {})
+    p["prompt"] = body.prompt
+    asset.params_json = p
+    db.commit()
+    return _asset_dto(asset)
+
+
 @app.post("/api/concepts/{asset_id}:generate")
 def generate_concept(asset_id: str, db: Session = Depends(get_db)):
     asset = db.get(Asset, asset_id)
@@ -258,6 +272,8 @@ def patch_shot(shot_id: str, body: ShotPatch, db: Session = Depends(get_db)):
     if not shot:
         raise HTTPException(404, "Шот не найден")
     g = dict(shot.graph_json or {})
+    if body.description is not None:
+        shot.description = body.description
     if body.lighting is not None:
         shot.lighting_prompt = body.lighting
     for field in ("camera_preset", "motion_strength", "voice_text", "voice_id",

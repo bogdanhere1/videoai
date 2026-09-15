@@ -41,8 +41,13 @@ class Storyboard(BaseModel):
     shots: list[ShotSpec]
 
 
+class ConceptEdit(BaseModel):
+    prompt: str
+
+
 # ---- Шот-эдитор (Фаза 4) ----
 class ShotPatch(BaseModel):
+    description: str | None = None
     lighting: str | None = None
     camera_preset: str | None = None
     motion_strength: float | None = None

@@ -55,6 +55,12 @@ export const api = {
     fetch(`/api/projects/${id}/visuals:extract`, { method: "POST" }).then(j),
   generateConcept: (assetId) =>
     fetch(`/api/concepts/${assetId}:generate`, { method: "POST" }).then(j),
+  editConcept: (assetId, prompt) =>
+    fetch(`/api/concepts/${assetId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    }).then(j),
   decideAsset: (assetId, decision, note = "") =>
     fetch(`/api/assets/${assetId}/${decision}`, {
       method: "POST",

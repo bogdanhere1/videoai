@@ -76,7 +76,7 @@ function Project({ project, onChange, afterChange }) {
   const [voices, setVoices] = useState([]);
   const [presets, setPresets] = useState([]);
   const [openShot, setOpenShot] = useState(null);
-  const [editSceneId, setEditSceneId] = useState(null);
+  const [editKey, setEditKey] = useState(null);
   const [editText, setEditText] = useState("");
   const mediaRef = useRef(null);
 
@@ -110,12 +110,24 @@ function Project({ project, onChange, afterChange }) {
     await api.decideScene(sceneId, d);
     return api.getProject(project.id);
   });
-  const startEditScene = (s) => { setEditSceneId(s.id); setEditText(s.script_text); };
-  const saveScene = () => run("scene", async () => {
-    const p = await api.editScene(editSceneId, editText);
-    setEditSceneId(null);
-    return p;
+  const startEdit = (key, text) => { setEditKey(key); setEditText(text); };
+  const saveEdit = (fn) => run("edit", async () => {
+    await fn(editText);
+    setEditKey(null);
+    return api.getProject(project.id);
   });
+  const editBox = (fn) => (
+    <>
+      <textarea className="scene-edit" rows={5} value={editText}
+        onChange={(e) => setEditText(e.target.value)} autoFocus />
+      <div className="row">
+        <button className="primary" disabled={busy} onClick={() => saveEdit(fn)}>
+          {busy === "edit" ? "…" : "Сохранить"}
+        </button>
+        <button onClick={() => setEditKey(null)}>Отмена</button>
+      </div>
+    </>
+  );
   const extractVisuals = () => run("visuals", () => api.extractVisuals(project.id));
   const genConcept = (assetId) => run("concept:" + assetId, async () => {
     await api.generateConcept(assetId);
@@ -195,22 +207,13 @@ function Project({ project, onChange, afterChange }) {
               <b>Сцена {s.order}</b>
               <span className={`tag ${s.status}`}>{s.status}</span>
             </div>
-            {editSceneId === s.id ? (
-              <>
-                <textarea className="scene-edit" rows={6} value={editText}
-                  onChange={(e) => setEditText(e.target.value)} autoFocus />
-                <div className="row">
-                  <button className="primary" disabled={busy} onClick={saveScene}>
-                    {busy === "scene" ? "…" : "Сохранить"}
-                  </button>
-                  <button onClick={() => setEditSceneId(null)}>Отмена</button>
-                </div>
-              </>
+            {editKey === "scene:" + s.id ? (
+              editBox((t) => api.editScene(s.id, t))
             ) : (
               <>
                 <pre>{s.script_text}</pre>
                 <div className="row">
-                  <button onClick={() => startEditScene(s)}>✎ Править</button>
+                  <button onClick={() => startEdit("scene:" + s.id, s.script_text)}>✎ Править</button>
                   <button onClick={() => decide(s.id, "approve")}>✓ Ок</button>
                   <button onClick={() => decide(s.id, "reject")}>✕ Переделать</button>
                 </div>
@@ -250,18 +253,25 @@ function Project({ project, onChange, afterChange }) {
                   </div>
                   <div className="concept-body">
                     <b>{c.name}</b>
-                    <p className="cprompt">{c.prompt}</p>
-                    <div className="row">
-                      <button disabled={busy} onClick={() => genConcept(c.id)}>
-                        {busy === "concept:" + c.id ? "Генерирую…" : c.url ? "↻ Перегенерировать" : "Сгенерировать"}
-                      </button>
-                      {c.url && (
-                        <>
-                          <button onClick={() => decideConcept(c.id, "approve")}>✓</button>
-                          <button onClick={() => decideConcept(c.id, "reject")}>✕</button>
-                        </>
-                      )}
-                    </div>
+                    {editKey === "concept:" + c.id ? (
+                      editBox((t) => api.editConcept(c.id, t))
+                    ) : (
+                      <>
+                        <p className="cprompt">{c.prompt}</p>
+                        <div className="row">
+                          <button disabled={busy} onClick={() => genConcept(c.id)}>
+                            {busy === "concept:" + c.id ? "Генерирую…" : c.url ? "↻ Перегенерировать" : "Сгенерировать"}
+                          </button>
+                          <button onClick={() => startEdit("concept:" + c.id, c.prompt)}>✎</button>
+                          {c.url && (
+                            <>
+                              <button onClick={() => decideConcept(c.id, "approve")}>✓</button>
+                              <button onClick={() => decideConcept(c.id, "reject")}>✕</button>
+                            </>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
@@ -292,20 +302,27 @@ function Project({ project, onChange, afterChange }) {
                         <span className="dur">{sh.duration}с</span>
                       </div>
                       <div className="shot-body">
-                        <p className="shot-desc">{sh.description}</p>
-                        <div className="shot-meta">
-                          <span>🎥 {sh.camera}</span>
-                          <span>💡 {sh.lighting}</span>
-                        </div>
-                        <div className="row">
-                          <button disabled={busy} onClick={() => genFrame(sh.id)}>
-                            {busy === "frame:" + sh.id ? "…" : sh.frame_url ? "↻ Кадр" : "Кадр"}
-                          </button>
-                          <button onClick={() => decideShot(sh.id, "approve")}>✓</button>
-                          <button onClick={() => decideShot(sh.id, "reject")}>✕</button>
-                          <button className={openShot === sh.id ? "primary" : ""}
-                            onClick={() => setOpenShot(openShot === sh.id ? null : sh.id)}>⚙ Элементы</button>
-                        </div>
+                        {editKey === "shot:" + sh.id ? (
+                          editBox((t) => api.patchShot(sh.id, { description: t }))
+                        ) : (
+                          <>
+                            <p className="shot-desc">{sh.description}</p>
+                            <div className="shot-meta">
+                              <span>🎥 {sh.camera}</span>
+                              <span>💡 {sh.lighting}</span>
+                            </div>
+                            <div className="row">
+                              <button disabled={busy} onClick={() => genFrame(sh.id)}>
+                                {busy === "frame:" + sh.id ? "…" : sh.frame_url ? "↻ Кадр" : "Кадр"}
+                              </button>
+                              <button onClick={() => startEdit("shot:" + sh.id, sh.description)}>✎</button>
+                              <button onClick={() => decideShot(sh.id, "approve")}>✓</button>
+                              <button onClick={() => decideShot(sh.id, "reject")}>✕</button>
+                              <button className={openShot === sh.id ? "primary" : ""}
+                                onClick={() => setOpenShot(openShot === sh.id ? null : sh.id)}>⚙ Элементы</button>
+                            </div>
+                          </>
+                        )}
                       </div>
                       {openShot === sh.id && (
                         <ShotEditor shot={sh} voices={voices} presets={presets}
