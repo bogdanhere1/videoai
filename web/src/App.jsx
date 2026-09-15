@@ -203,7 +203,8 @@ function StageNode({ data }) {
     <div className={`gnode ${open ? "open" : ""} ${status}`}>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
-      <div className="gnode-head">
+      <div className="gnode-head" title="Перетащи за шапку">
+        <span className="gnode-grip">⠿</span>
         <span className={`gnode-n ${status}`}>{status === "done" ? "✓" : data.n}</span>
         <span className="gnode-title">{data.title}</span>
         <button className="gnode-toggle nodrag" onClick={() => ctx.toggleExpand(data.key)}>
