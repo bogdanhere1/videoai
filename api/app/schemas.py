@@ -61,6 +61,10 @@ class ScriptReviseIn(BaseModel):
     feedback: str
 
 
+class SceneEdit(BaseModel):
+    script_text: str
+
+
 class ApprovalIn(BaseModel):
     note: str = ""
     actor: str = "owner"

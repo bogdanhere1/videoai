@@ -50,6 +50,7 @@ main { flex: 1; overflow-y: auto; padding: 24px; }
 .scene.rejected { border-color: #dc2626; }
 .scene-head { display: flex; justify-content: space-between; align-items: center; }
 .scene pre { white-space: pre-wrap; font: inherit; margin: 8px 0; color: #e2e8f0; }
+.scene-edit { margin: 8px 0; line-height: 1.5; }
 .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; }
 .tag.approved { background: #14532d; color: #86efac; }
 .tag.rejected { background: #7f1d1d; color: #fca5a5; }

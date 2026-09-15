@@ -17,6 +17,12 @@ export const api = {
     }).then(j),
   generateScript: (id) =>
     fetch(`/api/projects/${id}/script:generate`, { method: "POST" }).then(j),
+  editScene: (sceneId, script_text) =>
+    fetch(`/api/scenes/${sceneId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ script_text }),
+    }).then(j),
   reviseScript: (id, feedback) =>
     fetch(`/api/projects/${id}/script:revise`, {
       method: "POST",

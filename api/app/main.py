@@ -20,7 +20,9 @@ from .models import (
 from .presets import CAMERA_PRESETS
 from .providers import elevenlabs as el
 from .providers import get_video_provider
-from .schemas import ApprovalIn, IdeaIn, ScriptDraft, ScriptReviseIn, ShotPatch, TranscriptOut
+from .schemas import (
+    ApprovalIn, IdeaIn, SceneEdit, ScriptDraft, ScriptReviseIn, ShotPatch, TranscriptOut,
+)
 
 os.makedirs(settings.media_dir, exist_ok=True)
 
@@ -106,6 +108,17 @@ def revise_script(project_id: str, body: ScriptReviseIn, db: Session = Depends(g
         raise HTTPException(502, f"Gemini error: {e}")
     _apply_draft(db, project, draft)
     return _project_dto(project, db)
+
+
+@app.patch("/api/scenes/{scene_id}")
+def edit_scene(scene_id: str, body: SceneEdit, db: Session = Depends(get_db)):
+    """Ручная правка текста сцены (поправить слово, не перегенерируя)."""
+    scene = db.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(404, "Сцена не найдена")
+    scene.script_text = body.script_text
+    db.commit()
+    return _project_dto(db.get(Project, scene.project_id), db)
 
 
 # ---------- Стадия 3: визуал-стиль ----------

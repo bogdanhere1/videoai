@@ -76,6 +76,8 @@ function Project({ project, onChange, afterChange }) {
   const [voices, setVoices] = useState([]);
   const [presets, setPresets] = useState([]);
   const [openShot, setOpenShot] = useState(null);
+  const [editSceneId, setEditSceneId] = useState(null);
+  const [editText, setEditText] = useState("");
   const mediaRef = useRef(null);
 
   useEffect(() => { setIdea(project.brief_text || ""); }, [project.id]);
@@ -107,6 +109,12 @@ function Project({ project, onChange, afterChange }) {
   const decide = (sceneId, d) => run("scene", async () => {
     await api.decideScene(sceneId, d);
     return api.getProject(project.id);
+  });
+  const startEditScene = (s) => { setEditSceneId(s.id); setEditText(s.script_text); };
+  const saveScene = () => run("scene", async () => {
+    const p = await api.editScene(editSceneId, editText);
+    setEditSceneId(null);
+    return p;
   });
   const extractVisuals = () => run("visuals", () => api.extractVisuals(project.id));
   const genConcept = (assetId) => run("concept:" + assetId, async () => {
@@ -187,11 +195,27 @@ function Project({ project, onChange, afterChange }) {
               <b>Сцена {s.order}</b>
               <span className={`tag ${s.status}`}>{s.status}</span>
             </div>
-            <pre>{s.script_text}</pre>
-            <div className="row">
-              <button onClick={() => decide(s.id, "approve")}>✓ Ок</button>
-              <button onClick={() => decide(s.id, "reject")}>✕ Переделать</button>
-            </div>
+            {editSceneId === s.id ? (
+              <>
+                <textarea className="scene-edit" rows={6} value={editText}
+                  onChange={(e) => setEditText(e.target.value)} autoFocus />
+                <div className="row">
+                  <button className="primary" disabled={busy} onClick={saveScene}>
+                    {busy === "scene" ? "…" : "Сохранить"}
+                  </button>
+                  <button onClick={() => setEditSceneId(null)}>Отмена</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <pre>{s.script_text}</pre>
+                <div className="row">
+                  <button onClick={() => startEditScene(s)}>✎ Править</button>
+                  <button onClick={() => decide(s.id, "approve")}>✓ Ок</button>
+                  <button onClick={() => decide(s.id, "reject")}>✕ Переделать</button>
+                </div>
+              </>
+            )}
           </div>
         ))}
 
