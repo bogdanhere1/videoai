@@ -4,6 +4,7 @@
 Фаза 1: интейк идеи (текст/голос) + сценарий на Gemini с gate-подтверждениями.
 Фаза 2: извлечение визуалов + генерация концептов (Higgsfield Soul) + гейты по ассетам.
 """
+import hashlib
 import os
 from contextlib import asynccontextmanager
 
@@ -225,15 +226,32 @@ def generate_storyboard(project_id: str, db: Session = Depends(get_db)):
     return _project_dto(project, db)
 
 
+_FRAME_HINT = {
+    "single": "",
+    "start": ", first frame of the shot, starting pose and composition",
+    "end": ", final frame of the SAME shot — keep the exact same character, wardrobe, "
+           "location and lighting as the start frame, only the pose/action changes to the ending",
+}
+
+
+def _stable_seed(text: str) -> int:
+    return int(hashlib.md5(text.encode()).hexdigest()[:6], 16) % 1_000_000
+
+
 @app.post("/api/shots/{shot_id}:frame")
-def generate_frame(shot_id: str, db: Session = Depends(get_db)):
+def generate_frame(shot_id: str, variant: str = "single", db: Session = Depends(get_db)):
+    """Статичный кадр раскадровки. variant: single | start | end.
+    start/end делаются с одним сидом на шот → консистентная сцена, меняется поза/действие."""
     shot = db.get(Shot, shot_id)
     if not shot:
         raise HTTPException(404, "Шот не найден")
+    if variant not in _FRAME_HINT:
+        raise HTTPException(400, "variant: single|start|end")
     base = (shot.camera_json or {}).get("frame_prompt") or shot.description
-    prompt = _style_prefix(db, _shot_project_id(shot), "storyboard") + base
+    prompt = _style_prefix(db, _shot_project_id(shot), "storyboard") + base + _FRAME_HINT[variant]
+    seed = _stable_seed(shot_id)  # общий сид старта/финала одного шота → консистентность
     try:
-        res = get_video_provider().generate_image(prompt)
+        res = get_video_provider().generate_image(prompt, seed=seed)
     except Exception as e:
         raise HTTPException(502, f"Higgsfield error: {e}")
     if not res.url:
@@ -242,15 +260,14 @@ def generate_frame(shot_id: str, db: Session = Depends(get_db)):
         stored = storage.save_from_url(res.url)
     except Exception as e:
         raise HTTPException(502, f"Не удалось скачать кадр: {e}")
-    frame = (
-        db.query(Asset).filter(Asset.shot_id == shot_id, Asset.type == AssetType.frame).first()
-    )
+    frames = db.query(Asset).filter(Asset.shot_id == shot_id, Asset.type == AssetType.frame).all()
+    frame = next((a for a in frames if (a.params_json or {}).get("variant", "single") == variant), None)
     if frame:
-        frame.url = stored
+        frame.url, frame.approved = stored, False
         frame.version += 1
-        frame.approved = False
     else:
-        db.add(Asset(shot_id=shot_id, type=AssetType.frame, url=stored, source="higgsfield"))
+        db.add(Asset(shot_id=shot_id, type=AssetType.frame, url=stored, source="higgsfield",
+                     params_json={"variant": variant}))
     _log_usage(db, _shot_project_id(shot), "frame", "higgsfield", COST_USD["frame"])
     db.commit()
     return _shot_dto(db, shot)
@@ -280,6 +297,8 @@ def patch_shot(shot_id: str, body: ShotPatch, db: Session = Depends(get_db)):
         shot.description = body.description
     if body.lighting is not None:
         shot.lighting_prompt = body.lighting
+    if body.frame_mode is not None:
+        g["frame_mode"] = body.frame_mode
     for field in ("camera_preset", "motion_strength", "voice_text", "voice_id",
                   "music_prompt", "sfx_prompt"):
         val = getattr(body, field)
@@ -756,16 +775,23 @@ def _shot_project_id(shot: Shot) -> str | None:
 def _shot_dto(db: Session, s: Shot) -> dict:
     g = s.graph_json or {}
     cam = s.camera_json or {}
-    assets = {a.type: a for a in db.query(Asset).filter(Asset.shot_id == s.id).all()}
+    all_assets = db.query(Asset).filter(Asset.shot_id == s.id).all()
+    frames = {(a.params_json or {}).get("variant", "single"): a.url
+              for a in all_assets if a.type == AssetType.frame}
+    other = {a.type: a for a in all_assets if a.type != AssetType.frame}
     return {
         "id": s.id, "order": s.order, "description": s.description,
         "camera": cam.get("movement", ""), "lighting": s.lighting_prompt,
         "duration": s.duration, "status": s.status,
-        "frame_url": assets[AssetType.frame].url if AssetType.frame in assets else "",
-        "video_url": assets[AssetType.video].url if AssetType.video in assets else "",
-        "voice_url": assets[AssetType.voice].url if AssetType.voice in assets else "",
-        "music_url": assets[AssetType.music].url if AssetType.music in assets else "",
-        "sfx_url": assets[AssetType.sfx].url if AssetType.sfx in assets else "",
+        "frame_mode": g.get("frame_mode", "single"),
+        "frame_single": frames.get("single", ""),
+        "frame_start": frames.get("start", ""),
+        "frame_end": frames.get("end", ""),
+        "frame_url": frames.get("single") or frames.get("start") or "",
+        "video_url": other[AssetType.video].url if AssetType.video in other else "",
+        "voice_url": other[AssetType.voice].url if AssetType.voice in other else "",
+        "music_url": other[AssetType.music].url if AssetType.music in other else "",
+        "sfx_url": other[AssetType.sfx].url if AssetType.sfx in other else "",
         "camera_preset": g.get("camera_preset", "General"),
         "motion_strength": g.get("motion_strength", 0.6),
         "voice_text": g.get("voice_text", ""),

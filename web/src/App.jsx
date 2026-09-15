@@ -13,10 +13,11 @@ const STAGE_LABEL = {
 const BRANCH = [
   { key: "script", n: 1, title: "Идея + Сценарий" },
   { key: "style", n: 2, title: "Визуал-стиль" },
-  { key: "storyboard", n: 3, title: "Раскадровка + шоты" },
-  { key: "assembly", n: 4, title: "Сборка" },
+  { key: "storyboard", n: 3, title: "Раскадровка (статика)" },
+  { key: "shots", n: 4, title: "Шоты (анимация)" },
+  { key: "assembly", n: 5, title: "Сборка" },
 ];
-const stageKey = (s) => (s === "shots" ? "storyboard" : s === "idea" ? "script" : s);
+const stageKey = (s) => (s === "idea" ? "script" : s);
 const refUrl = (r) => (typeof r === "string" ? r : r?.url);
 const MOD_META = {
   style: { icon: "🎨", title: "Стиль", accent: "style", upload: true, gen: false,
@@ -131,12 +132,15 @@ function ProjectView({ project, onChange, afterChange }) {
   });
 
   const shotsCount = project.scenes.reduce((n, s) => n + (s.shots?.length || 0), 0);
+  const anyVideo = project.scenes.some((sc) => (sc.shots || []).some((sh) => sh.video_url));
+  const anyFrame = project.scenes.some((sc) => (sc.shots || []).some((sh) => sh.frame_url || sh.frame_start));
   const stageStatus = (key) => {
     const has = {
       idea: !!project.brief_text,
       script: project.scenes.length > 0,
       style: project.concepts.length > 0,
-      storyboard: shotsCount > 0,
+      storyboard: anyFrame || shotsCount > 0,
+      shots: anyVideo,
       assembly: !!project.final_url,
     }[key];
     return has ? "done" : "empty";
@@ -400,6 +404,48 @@ function ModifierBody({ m, meta }) {
   );
 }
 
+function FrameSlot({ url, label, busy, onGen, dur }) {
+  return (
+    <div className="frame-slot">
+      <div className="shot-media">
+        {url ? <img src={url} alt={label} /> : <div className="ph">нет кадра</div>}
+        {dur ? <span className="dur">{dur}с</span> : null}
+        <span className="slot-label">{label}</span>
+      </div>
+      <button className="wfull" disabled={busy} onClick={onGen}>
+        {busy ? "…" : url ? "↻ " + label : label}
+      </button>
+    </div>
+  );
+}
+
+function SequencePlayer({ scenes }) {
+  const ref = useRef(null);
+  const [idx, setIdx] = useState(0);
+  const urls = scenes.flatMap((sc) => (sc.shots || [])
+    .filter((sh) => sh.status !== "rejected" && sh.video_url)
+    .map((sh) => sh.video_url));
+  if (urls.length === 0) {
+    return <p className="hint">Видео шотов ещё нет — плеер появится, когда сгенерируешь
+      ролики шотов (ждёт баланс Higgsfield).</p>;
+  }
+  const playFrom = (n) => {
+    setIdx(n);
+    const v = ref.current; if (!v) return;
+    v.src = urls[n]; v.currentTime = 0; v.play().catch(() => {});
+  };
+  const onEnded = () => { if (idx + 1 < urls.length) playFrom(idx + 1); };
+  return (
+    <div className="seq-player">
+      <video ref={ref} src={urls[idx]} controls onEnded={onEnded} />
+      <div className="row">
+        <button className="primary" onClick={() => playFrom(0)}>▶ Играть всё</button>
+        <span className="muted">шот {idx + 1} / {urls.length}</span>
+      </div>
+    </div>
+  );
+}
+
 function StageBody({ k }) {
   const c = useContext(PC);
   const { project, busy } = c;
@@ -494,34 +540,77 @@ function StageBody({ k }) {
         <button disabled={busy} onClick={() => c.run("storyboard", () => api.generateStoryboard(project.id))}>
           {busy === "storyboard" ? "…" : "↻ Пересобрать раскадровку"}
         </button>
+        <p className="hint">Только статичные кадры. На шот: один кадр или старт+финал
+          (общий сид → консистентная сцена, меняется поза/действие).</p>
+        <div className="shots-strip">
+          {project.scenes.flatMap((sc) => (sc.shots || []).map((sh, i) => {
+            const mode = sh.frame_mode || "single";
+            const setMode = (mm) => c.run("shot", async () => { await api.patchShot(sh.id, { frame_mode: mm }); return api.getProject(project.id); });
+            const genFrame = (v) => c.run("frame:" + sh.id + v, async () => { await api.generateFrame(sh.id, v); return api.getProject(project.id); });
+            return (
+              <div key={sh.id} className={`shot ${sh.status}`}>
+                {i === 0 && <div className="strip-scene">Сцена {sc.order}</div>}
+                <div className="seg-row nodrag">
+                  <button className={mode === "single" ? "seg on" : "seg"} onClick={() => setMode("single")}>1 кадр</button>
+                  <button className={mode === "startend" ? "seg on" : "seg"} onClick={() => setMode("startend")}>Старт+Финал</button>
+                </div>
+                {mode === "single" ? (
+                  <FrameSlot url={sh.frame_single || sh.frame_url} label="Кадр" dur={sh.duration}
+                    busy={busy === "frame:" + sh.id + "single"} onGen={() => genFrame("single")} />
+                ) : (
+                  <div className="frame-pair">
+                    <FrameSlot url={sh.frame_start} label="Старт"
+                      busy={busy === "frame:" + sh.id + "start"} onGen={() => genFrame("start")} />
+                    <FrameSlot url={sh.frame_end} label="Финал"
+                      busy={busy === "frame:" + sh.id + "end"} onGen={() => genFrame("end")} />
+                  </div>
+                )}
+                <div className="shot-body">
+                  {c.editKey === "shot:" + sh.id ? (
+                    <EditBox initial={sh.description} busy={busy === "edit"} onCancel={() => c.setEditKey(null)}
+                      onSave={(val) => c.commitEdit(() => api.patchShot(sh.id, { description: val }))} />
+                  ) : (
+                    <>
+                      <p className="shot-desc">{sh.description}</p>
+                      <div className="shot-meta"><span>🎥 {sh.camera}</span><span>💡 {sh.lighting}</span></div>
+                      <div className="row">
+                        <button onClick={() => c.startEdit("shot:" + sh.id)}>✎ Править</button>
+                        <button onClick={() => c.run("shot", async () => { await api.decideShot(sh.id, "approve"); return api.getProject(project.id); })}>✓</button>
+                        <button onClick={() => c.run("shot", async () => { await api.decideShot(sh.id, "reject"); return api.getProject(project.id); })}>✕</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          }))}
+        </div>
+      </>
+    )
+  );
+
+  if (k === "shots") return (
+    c.shotsCount === 0 ? (
+      <p className="hint">Сначала сделай раскадровку — здесь оживим утверждённые кадры в видео.</p>
+    ) : (
+      <>
+        <SequencePlayer scenes={project.scenes} />
         <div className="shots-strip">
           {project.scenes.flatMap((sc) => (sc.shots || []).map((sh, i) => (
             <div key={sh.id} className={`shot ${sh.status}`}>
               {i === 0 && <div className="strip-scene">Сцена {sc.order}</div>}
               <div className="shot-media">
-                {sh.frame_url ? <img src={sh.frame_url} alt="" /> : <div className="ph">кадр не сгенерирован</div>}
+                {sh.video_url
+                  ? <video src={sh.video_url} controls />
+                  : (sh.frame_url ? <img src={sh.frame_url} alt="" /> : <div className="ph">нет кадра</div>)}
                 <span className="dur">{sh.duration}с</span>
               </div>
               <div className="shot-body">
-                {c.editKey === "shot:" + sh.id ? (
-                  <EditBox initial={sh.description} busy={busy === "edit"} onCancel={() => c.setEditKey(null)}
-                    onSave={(val) => c.commitEdit(() => api.patchShot(sh.id, { description: val }))} />
-                ) : (
-                  <>
-                    <p className="shot-desc">{sh.description}</p>
-                    <div className="shot-meta"><span>🎥 {sh.camera}</span><span>💡 {sh.lighting}</span></div>
-                    <div className="row">
-                      <button disabled={busy} onClick={() => c.run("frame:" + sh.id, async () => { await api.generateFrame(sh.id); return api.getProject(project.id); })}>
-                        {busy === "frame:" + sh.id ? "…" : sh.frame_url ? "↻ Кадр" : "Кадр"}
-                      </button>
-                      <button onClick={() => c.startEdit("shot:" + sh.id)}>✎</button>
-                      <button onClick={() => c.run("shot", async () => { await api.decideShot(sh.id, "approve"); return api.getProject(project.id); })}>✓</button>
-                      <button onClick={() => c.run("shot", async () => { await api.decideShot(sh.id, "reject"); return api.getProject(project.id); })}>✕</button>
-                      <button className={c.openShot === sh.id ? "primary" : ""}
-                        onClick={() => c.setOpenShot(c.openShot === sh.id ? null : sh.id)}>⚙</button>
-                    </div>
-                  </>
-                )}
+                <p className="shot-desc">{sh.description}</p>
+                <div className="row">
+                  <button className={c.openShot === sh.id ? "primary" : ""}
+                    onClick={() => c.setOpenShot(c.openShot === sh.id ? null : sh.id)}>⚙ Элементы</button>
+                </div>
               </div>
               {c.openShot === sh.id && <ShotEditor shot={sh} />}
             </div>

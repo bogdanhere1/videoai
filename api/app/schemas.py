@@ -69,6 +69,7 @@ class StageSettingIn(BaseModel):
 # ---- Шот-эдитор (Фаза 4) ----
 class ShotPatch(BaseModel):
     description: str | None = None
+    frame_mode: str | None = None   # single | startend
     lighting: str | None = None
     camera_preset: str | None = None
     motion_strength: float | None = None

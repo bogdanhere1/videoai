@@ -71,8 +71,8 @@ export const api = {
     fetch(`/api/shots/${shotId}/${element}:generate`, { method: "POST" }).then(j),
   generateStoryboard: (id) =>
     fetch(`/api/projects/${id}/storyboard:generate`, { method: "POST" }).then(j),
-  generateFrame: (shotId) =>
-    fetch(`/api/shots/${shotId}:frame`, { method: "POST" }).then(j),
+  generateFrame: (shotId, variant = "single") =>
+    fetch(`/api/shots/${shotId}:frame?variant=${variant}`, { method: "POST" }).then(j),
   decideShot: (shotId, decision, note = "") =>
     fetch(`/api/shots/${shotId}/${decision}`, {
       method: "POST",
