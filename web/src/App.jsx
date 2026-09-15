@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 
-const STAGES = ["idea", "script", "style", "storyboard", "shots", "assembly"];
 const STAGE_LABEL = {
   idea: "Идея", script: "Сценарий", style: "Стиль",
   storyboard: "Раскадровка", shots: "Шоты", assembly: "Сборка",
 };
+// Ветка-пайплайн (аккордеон): 5 узлов, «шоты» живут внутри раскадровки.
+const BRANCH = [
+  { key: "idea", n: 1, title: "Идея" },
+  { key: "script", n: 2, title: "Сценарий" },
+  { key: "style", n: 3, title: "Визуал-стиль" },
+  { key: "storyboard", n: 4, title: "Раскадровка + шоты" },
+  { key: "assembly", n: 5, title: "Сборка" },
+];
+const stageKey = (s) => (s === "shots" ? "storyboard" : s);
 
 export default function App() {
   const [health, setHealth] = useState(null);
@@ -55,19 +63,6 @@ export default function App() {
   );
 }
 
-function StageBar({ stage }) {
-  const idx = STAGES.indexOf(stage);
-  return (
-    <div className="stagebar">
-      {STAGES.map((s, i) => (
-        <span key={s} className={`step ${i <= idx ? "done" : ""} ${i === idx ? "cur" : ""}`}>
-          {i + 1}·{STAGE_LABEL[s]}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function Project({ project, onChange, afterChange }) {
   const [idea, setIdea] = useState(project.brief_text || "");
   const [feedback, setFeedback] = useState("");
@@ -78,9 +73,13 @@ function Project({ project, onChange, afterChange }) {
   const [openShot, setOpenShot] = useState(null);
   const [editKey, setEditKey] = useState(null);
   const [editText, setEditText] = useState("");
+  const [openStage, setOpenStage] = useState(() => stageKey(project.stage));
   const mediaRef = useRef(null);
 
-  useEffect(() => { setIdea(project.brief_text || ""); }, [project.id]);
+  useEffect(() => {
+    setIdea(project.brief_text || "");
+    setOpenStage(stageKey(project.stage));
+  }, [project.id]);
   useEffect(() => {
     api.getVoices().then(setVoices).catch(() => {});
     api.getCameraPresets().then(setPresets).catch(() => {});
@@ -147,6 +146,17 @@ function Project({ project, onChange, afterChange }) {
     return api.getProject(project.id);
   });
   const shotsCount = project.scenes.reduce((n, s) => n + (s.shots?.length || 0), 0);
+  const toggleStage = (key) => setOpenStage(openStage === key ? null : key);
+  const stageStatus = (key) => {
+    const has = {
+      idea: !!project.brief_text,
+      script: project.scenes.length > 0,
+      style: project.concepts.length > 0,
+      storyboard: shotsCount > 0,
+      assembly: !!project.final_url,
+    }[key];
+    return has ? "done" : "empty";
+  };
   const assemble = () => run("assemble", async () => {
     await api.assembleProject(project.id);
     return api.getProject(project.id);
@@ -175,12 +185,13 @@ function Project({ project, onChange, afterChange }) {
   return (
     <div className="project">
       <div className="topline">
-        <StageBar stage={project.stage} />
+        <h2 className="pname">{project.title}</h2>
         <span className="cost">≈ ${project.cost_usd ?? 0} · API</span>
       </div>
 
-      <section>
-        <h2>1 · Идея</h2>
+      <div className="branch">
+      <StageSection n={1} title="Идея" k="idea" open={openStage === "idea"}
+        status={stageStatus("idea")} onToggle={() => toggleStage("idea")}>
         <textarea rows={3} value={idea} onChange={(e) => setIdea(e.target.value)}
           placeholder="Опиши идею ролика — текстом или голосом…" />
         <div className="row">
@@ -192,10 +203,10 @@ function Project({ project, onChange, afterChange }) {
           </button>
           {busy === "stt" && <span className="muted">распознаю…</span>}
         </div>
-      </section>
+      </StageSection>
 
-      <section>
-        <h2>2 · Сценарий</h2>
+      <StageSection n={2} title="Сценарий" k="script" open={openStage === "script"}
+        status={stageStatus("script")} onToggle={() => toggleStage("script")}>
         {project.logline && <p className="logline">«{project.logline}»</p>}
         <button className="primary" disabled={!project.brief_text || busy} onClick={genScript}>
           {busy === "script" ? "Генерирую…" : project.scenes.length ? "Перегенерировать" : "Сгенерировать сценарий"}
@@ -229,10 +240,10 @@ function Project({ project, onChange, afterChange }) {
             <button disabled={!feedback.trim() || busy} onClick={revise}>Внести правки</button>
           </div>
         )}
-      </section>
+      </StageSection>
 
-      <section>
-        <h2>3 · Визуал-стиль</h2>
+      <StageSection n={3} title="Визуал-стиль" k="style" open={openStage === "style"}
+        status={stageStatus("style")} onToggle={() => toggleStage("style")}>
         {project.concepts.length === 0 ? (
           <button className="primary" disabled={!project.scenes.length || busy} onClick={extractVisuals}>
             {busy === "visuals" ? "Извлекаю…" : "Извлечь визуалы из сценария"}
@@ -278,10 +289,10 @@ function Project({ project, onChange, afterChange }) {
             </div>
           </>
         )}
-      </section>
+      </StageSection>
 
-      <section>
-        <h2>4 · Раскадровка</h2>
+      <StageSection n={4} title="Раскадровка + шоты" k="storyboard" open={openStage === "storyboard"}
+        status={stageStatus("storyboard")} onToggle={() => toggleStage("storyboard")}>
         {shotsCount === 0 ? (
           <button className="primary" disabled={!project.scenes.length || busy} onClick={genStoryboard}>
             {busy === "storyboard" ? "Раскадровываю…" : "Сделать раскадровку"}
@@ -335,10 +346,10 @@ function Project({ project, onChange, afterChange }) {
             ))}
           </>
         )}
-      </section>
+      </StageSection>
 
-      <section>
-        <h2>5 · Сборка</h2>
+      <StageSection n={5} title="Сборка" k="assembly" open={openStage === "assembly"}
+        status={stageStatus("assembly")} onToggle={() => toggleStage("assembly")}>
         <button className="primary" disabled={shotsCount === 0 || busy} onClick={assemble}>
           {busy === "assemble" ? "Собираю…" : project.final_url ? "↻ Пересобрать ролик" : "Собрать ролик"}
         </button>
@@ -349,7 +360,26 @@ function Project({ project, onChange, afterChange }) {
         {project.final_url && (
           <video controls src={project.final_url} style={{ width: "100%", maxWidth: 640, marginTop: 12, borderRadius: 10 }} />
         )}
-      </section>
+      </StageSection>
+      </div>
+    </div>
+  );
+}
+
+function StageSection({ n, title, k, status, open, onToggle, children }) {
+  return (
+    <div className={`snode ${open ? "open" : ""} ${status}`}>
+      <div className="snode-rail">
+        <div className={`snode-dot ${status}`}>{status === "done" ? "✓" : n}</div>
+      </div>
+      <div className="snode-main">
+        <button className="snode-head" onClick={onToggle}>
+          <span className="snode-title">{n} · {title}</span>
+          <span className={`snode-state ${status}`}>{status === "done" ? "готово" : "пусто"}</span>
+          <span className="snode-chev">{open ? "▾" : "▸"}</span>
+        </button>
+        {open && <div className="snode-body">{children}</div>}
+      </div>
     </div>
   );
 }
