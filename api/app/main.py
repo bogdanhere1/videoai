@@ -433,14 +433,19 @@ def _modifier_dto(m: Modifier) -> dict:
     }
 
 
-def _style_prefix(db: Session, project_id: str, stage: str) -> str:
-    """Собирает текст стиля из включённых узлов «Стиль», нацеленных на этап."""
+def _style_prefix(db: Session, project_id: str, stage: str, kinds=("style", "character")) -> str:
+    """Собирает текст из включённых узлов-модификаторов (Стиль/Персонаж) для этапа."""
     mods = db.query(Modifier).filter(
-        Modifier.project_id == project_id, Modifier.kind == "style", Modifier.enabled == True  # noqa: E712
+        Modifier.project_id == project_id, Modifier.kind.in_(kinds),
+        Modifier.enabled == True,  # noqa: E712
     ).all()
-    parts = [m.reference_text.strip() for m in mods
-             if m.reference_text.strip() and m.target_stage in (stage, "both")]
-    return ("Style reference: " + " | ".join(parts) + ". ") if parts else ""
+    parts = []
+    for m in mods:
+        t = (m.reference_text or "").strip()
+        if not t or m.target_stage not in (stage, "both"):
+            continue
+        parts.append(("Character: " if m.kind == "character" else "Style: ") + t)
+    return (" | ".join(parts) + ". ") if parts else ""
 
 
 @app.get("/api/projects/{project_id}/modifiers")
@@ -484,6 +489,49 @@ async def upload_reference(mid: str, file: UploadFile = File(...), db: Session =
     url = storage.save_bytes(data, ext)
     m.refs_json = list(m.refs_json or []) + [url]
     db.commit()
+    return _modifier_dto(m)
+
+
+@app.post("/api/modifiers/{mid}/character:generate")
+def generate_character_views(mid: str, db: Session = Depends(get_db)):
+    """Генерит набор видов персонажа: тело БЕЗ головы (для позы/одежды) + крупный
+    детальный план лица (чтобы не тащить низкодетальное лицо на общем плане)."""
+    m = db.get(Modifier, mid)
+    if not m or m.kind != "character":
+        raise HTTPException(404, "Узел-персонаж не найден")
+    desc = (m.reference_text or "").strip()
+    if not desc:
+        raise HTTPException(400, "Опиши персонажа в референс-тексте")
+    style = _style_prefix(db, m.project_id, "storyboard", kinds=("style",))
+    views = [
+        ("Тело · фронт (без головы)",
+         f"{style}full body character reference sheet of {desc}, cropped at the neck, "
+         f"headless, no head visible, detailed outfit and footwear, standing neutral A-pose, "
+         f"plain light-grey studio backdrop, sharp high detail, photoreal"),
+        ("Тело · 3/4 (без головы)",
+         f"{style}full body character reference of {desc}, three-quarter view, cropped at the "
+         f"neck, headless, no head visible, detailed clothing, plain studio backdrop, high detail"),
+        ("Лицо · крупный план",
+         f"{style}extreme close-up beauty portrait, only the head and face of {desc}, highly "
+         f"detailed facial features and skin texture, sharp focus, front view, soft studio "
+         f"lighting, plain background"),
+    ]
+    provider = get_video_provider()
+    out = list(m.refs_json or [])
+    added, errors = 0, []
+    for label, prompt in views:
+        try:
+            res = provider.generate_image(prompt)
+            if res.url:
+                out.append({"label": label, "url": storage.save_from_url(res.url)})
+                _log_usage(db, m.project_id, "concept", "higgsfield", COST_USD["concept"])
+                added += 1
+        except Exception as e:
+            errors.append(f"{label}: {e}")
+    m.refs_json = out
+    db.commit()
+    if added == 0 and errors:
+        raise HTTPException(502, "; ".join(errors)[:400])
     return _modifier_dto(m)
 
 

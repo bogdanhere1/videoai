@@ -17,6 +17,7 @@ const BRANCH = [
   { key: "assembly", n: 4, title: "Сборка" },
 ];
 const stageKey = (s) => (s === "shots" ? "storyboard" : s === "idea" ? "script" : s);
+const refUrl = (r) => (typeof r === "string" ? r : r?.url);
 
 const PC = createContext(null);
 
@@ -88,8 +89,8 @@ function ProjectView({ project, onChange, afterChange }) {
     api.getCameraPresets().then(setPresets).catch(() => {});
   }, []);
 
-  const addStyleNode = async () => {
-    const m = await api.createModifier(project.id, "style", "storyboard");
+  const addModifierNode = async (kind) => {
+    const m = await api.createModifier(project.id, kind, "storyboard");
     await reloadModifiers();
     setExpanded((prev) => new Set(prev).add(m.id));
   };
@@ -145,7 +146,8 @@ function ProjectView({ project, onChange, afterChange }) {
         <div className="canvas-top">
           <h2 className="pname">{project.title}</h2>
           <div className="canvas-actions">
-            <button onClick={addStyleNode}>+ Узел «Стиль»</button>
+            <button onClick={() => addModifierNode("style")}>+ Стиль</button>
+            <button onClick={() => addModifierNode("character")}>+ Персонаж</button>
             <span className="cost">≈ ${project.cost_usd ?? 0} · API</span>
             <button onClick={() => setShowSettings(true)}>⚙ Настройки</button>
           </div>
@@ -161,7 +163,7 @@ function ProjectView({ project, onChange, afterChange }) {
   );
 }
 
-const nodeTypes = { stage: StageNode, style: StyleNode };
+const nodeTypes = { stage: StageNode, style: StyleNode, character: CharacterNode };
 
 function Board({ project }) {
   const ctx = useContext(PC);
@@ -178,7 +180,7 @@ function Board({ project }) {
     dragHandle: ".gnode-head",
   });
   const modNode = (m) => ({
-    id: m.id, type: "style",
+    id: m.id, type: m.kind === "character" ? "character" : "style",
     position: saved[m.id] || { x: m.pos_x || 120, y: m.pos_y || 340 },
     data: { id: m.id },
     dragHandle: ".gnode-head",
@@ -308,12 +310,94 @@ function StyleBody({ m }) {
         <option value="both">Оба</option>
       </select>
       {m.refs?.length > 0 && (
-        <div className="refs">{m.refs.map((u, i) => <img key={i} src={u} alt="ref" />)}</div>
+        <div className="refs">{m.refs.map((u, i) => <img key={i} src={refUrl(u)} alt="ref" />)}</div>
       )}
       <div className="row">
         <button disabled={busy} onClick={() => fileRef.current?.click()}>📎 Референс</button>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
         <button className="primary" disabled={busy} onClick={save}>{busy ? "…" : "Сохранить"}</button>
+      </div>
+      <div className="row">
+        <button onClick={toggle}>{m.enabled ? "Выключить" : "Включить"}</button>
+        <button onClick={del}>🗑 Удалить</button>
+      </div>
+    </>
+  );
+}
+
+function CharacterNode({ data }) {
+  const ctx = useContext(PC);
+  const m = ctx.modifiers.find((x) => x.id === data.id);
+  const open = ctx.expanded.has(data.id);
+  if (!m) return null;
+  return (
+    <div className={`gnode character ${open ? "open" : ""} ${m.enabled ? "on" : "off"}`}>
+      <Handle type="source" position={Position.Right} />
+      <div className="gnode-head" title="Перетащи за шапку">
+        <span className="gnode-grip">⠿</span>
+        <span className="gnode-badge">🧍</span>
+        <span className="gnode-title">Персонаж{m.enabled ? "" : " (выкл)"}</span>
+        <button className="gnode-toggle nodrag" onClick={() => ctx.toggleExpand(data.id)}>
+          {open ? "▾" : "▸"}
+        </button>
+      </div>
+      {open && <div className="gnode-body nodrag"><CharacterBody m={m} /></div>}
+    </div>
+  );
+}
+
+function CharacterBody({ m }) {
+  const { reloadModifiers } = useContext(PC);
+  const [text, setText] = useState(m.reference_text || "");
+  const [target, setTarget] = useState(m.target_stage || "storyboard");
+  const [busy, setBusy] = useState("");
+  const views = (m.refs || []).filter((r) => typeof r === "object");
+
+  const save = async () => {
+    setBusy("save");
+    try { await api.patchModifier(m.id, { reference_text: text, target_stage: target }); await reloadModifiers(); }
+    catch (e) { alert(e.message); } finally { setBusy(""); }
+  };
+  const gen = async () => {
+    setBusy("gen");
+    try {
+      await api.patchModifier(m.id, { reference_text: text, target_stage: target });
+      await api.generateCharacter(m.id);
+      await reloadModifiers();
+    } catch (e) { alert("Генерация: " + e.message); } finally { setBusy(""); }
+  };
+  const toggle = async () => { await api.patchModifier(m.id, { enabled: !m.enabled }); reloadModifiers(); };
+  const del = async () => {
+    if (confirm("Удалить узел «Персонаж»?")) { await api.deleteModifier(m.id); reloadModifiers(); }
+  };
+
+  return (
+    <>
+      <label className="el-label">Описание персонажа (EN)</label>
+      <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)}
+        placeholder="напр. young female barista, red apron, freckles, curly auburn hair" />
+      <p className="hint">
+        Сгенерит: тело <b>без головы</b> (2 ракурса) + <b>крупный детальный портрет лица</b> —
+        чтобы лицо не «мылилось» на общем плане.
+      </p>
+      <label className="el-label">Подключить к этапу</label>
+      <select value={target} onChange={(e) => setTarget(e.target.value)}>
+        <option value="style">Визуал-стиль</option>
+        <option value="storyboard">Раскадровка</option>
+        <option value="both">Оба</option>
+      </select>
+      {views.length > 0 && (
+        <div className="refs labeled">
+          {views.map((r, i) => (
+            <figure key={i}><img src={r.url} alt="" /><figcaption>{r.label}</figcaption></figure>
+          ))}
+        </div>
+      )}
+      <div className="row">
+        <button className="primary" disabled={!!busy} onClick={gen}>
+          {busy === "gen" ? "Генерирую виды…" : "Сгенерировать виды"}
+        </button>
+        <button disabled={!!busy} onClick={save}>{busy === "save" ? "…" : "Сохранить"}</button>
       </div>
       <div className="row">
         <button onClick={toggle}>{m.enabled ? "Выключить" : "Включить"}</button>
