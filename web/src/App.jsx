@@ -199,19 +199,22 @@ function Board({ project }) {
   })();
 
   const posOf = (id, def) => (saved[id] ? { x: saved[id].x, y: saved[id].y } : def);
-  const widthOf = (id, def) => saved[id]?.w || def;
+  const styleOf = (id, defW) => ({
+    width: saved[id]?.w || defW,
+    ...(saved[id]?.h ? { height: saved[id].h } : {}),
+  });
 
   const stageNode = (st, i) => ({
     id: st.key, type: "stage",
     position: posOf(st.key, { x: i * 300, y: 60 }),
-    style: { width: widthOf(st.key, DEFAULT_W[st.key] || 300) },
+    style: styleOf(st.key, DEFAULT_W[st.key] || 300),
     data: { key: st.key, n: st.n, title: st.title },
     dragHandle: ".gnode-head",
   });
   const modNode = (m) => ({
     id: m.id, type: MOD_META[m.kind] ? m.kind : "style",
     position: posOf(m.id, { x: m.pos_x || 120, y: m.pos_y || 340 }),
-    style: { width: widthOf(m.id, 300) },
+    style: styleOf(m.id, 300),
     data: { id: m.id },
     dragHandle: ".gnode-head",
   });
@@ -225,7 +228,7 @@ function Board({ project }) {
     setNodes((cur) => {
       const byId = Object.fromEntries(cur.map((n) => [n.id, n]));
       const keep = (n) => (byId[n.id]
-        ? { ...n, position: byId[n.id].position, style: { ...n.style, width: byId[n.id].style?.width || n.style?.width } }
+        ? { ...n, position: byId[n.id].position, style: byId[n.id].style || n.style }
         : n);
       return [...BRANCH.map(stageNode).map(keep), ...modifiers.map(modNode).map(keep)];
     });
@@ -235,7 +238,7 @@ function Board({ project }) {
   useEffect(() => {
     const layout = {};
     nodes.forEach((n) => {
-      layout[n.id] = { x: n.position.x, y: n.position.y, w: n.width || n.style?.width };
+      layout[n.id] = { x: n.position.x, y: n.position.y, w: n.style?.width || n.width, h: n.style?.height };
     });
     try { localStorage.setItem(posKey, JSON.stringify(layout)); } catch { /* ignore */ }
   }, [nodes, posKey]);
@@ -297,6 +300,7 @@ function StageNode({ data }) {
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
       <NodeResizeControl position="right" variant="line" minWidth={200} maxWidth={1100} className="rz" />
+      <NodeResizeControl position="bottom-right" minWidth={200} minHeight={90} className="rz-corner" />
       <div className="gnode-head" title="Перетащи за шапку">
         <span className="gnode-grip">⠿</span>
         <span className={`gnode-n ${status}`}>{status === "done" ? "✓" : data.n}</span>
@@ -324,6 +328,7 @@ function ModifierNode({ data }) {
     <div className={`gnode ${meta.accent} ${open ? "open" : ""} ${m.enabled ? "on" : "off"}`}>
       <Handle type="source" position={Position.Right} />
       <NodeResizeControl position="right" variant="line" minWidth={200} maxWidth={700} className="rz" />
+      <NodeResizeControl position="bottom-right" minWidth={200} minHeight={90} className="rz-corner" />
       <div className="gnode-head" title="Перетащи за шапку">
         <span className="gnode-grip">⠿</span>
         <span className="gnode-badge">{meta.icon}</span>
