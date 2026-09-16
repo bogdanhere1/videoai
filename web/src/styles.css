@@ -52,17 +52,13 @@ main { flex: 1; position: relative; overflow: hidden; }
   box-shadow: 0 10px 30px -14px rgba(0,0,0,.7); overflow: hidden; position: relative;
 }
 .gnode.done { border-color: rgba(22,163,74,.5); }
-/* Ручка растягивания по ширине (правый край) */
-.react-flow__resize-control.rz { border: none; background: transparent; }
-.react-flow__resize-control.rz.right { width: 10px; right: -5px; cursor: ew-resize; }
-.gnode:hover::after {
-  content: ""; position: absolute; top: 10px; bottom: 10px; right: 3px; width: 3px;
-  border-radius: 3px; background: #6366f1; opacity: .45; pointer-events: none;
-}
-/* Угловая ручка (ширина + высота) */
+/* Невидимые увеличенные зоны ресайза (края + угол) */
+.react-flow__resize-control.rz-edge { border: none; background: transparent; }
+.react-flow__resize-control.rz-edge.right { width: 12px; right: -6px; cursor: ew-resize; }
+.react-flow__resize-control.rz-edge.bottom { height: 12px; bottom: -6px; cursor: ns-resize; }
 .react-flow__resize-control.rz-corner {
-  width: 13px; height: 13px; right: -4px; bottom: -4px; border-radius: 3px;
-  background: #6366f1; border: 2px solid #0d1017; cursor: nwse-resize;
+  width: 22px; height: 22px; right: -9px; bottom: -9px;
+  background: transparent; border: none; cursor: nwse-resize;
 }
 .gnode-head {
   display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: grab;
@@ -97,6 +93,10 @@ main { flex: 1; position: relative; overflow: hidden; }
 .gnode.style.off { opacity: .65; }
 .gnode-badge { font-size: 14px; flex: none; }
 .el-label { font-size: 11.5px; color: #94a3b8; display: block; margin: 8px 0 4px; }
+.targets { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.tchip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 4px 9px; border-radius: 999px; background: #0b1120; border: 1px solid #334155; color: #94a3b8; cursor: pointer; }
+.tchip.on { background: #312e81; border-color: #6366f1; color: #e0e7ff; }
+.tchip input { accent-color: #6366f1; margin: 0; }
 .gnode.style select, .gnode.style textarea { width: 100%; }
 .gnode.style select { font: inherit; padding: 6px 8px; border-radius: 7px; background: #0b1120; color: #e2e8f0; border: 1px solid #334155; }
 .refs { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }

@@ -19,6 +19,15 @@ const BRANCH = [
 ];
 const stageKey = (s) => (s === "idea" ? "script" : s);
 const DEFAULT_W = { script: 340, style: 320, storyboard: 640, shots: 640, assembly: 320 };
+// Этапы, к которым можно подключать узлы-модификаторы (мульти-цель)
+const MOD_STAGES = ["style", "storyboard", "shots"];
+const MOD_STAGE_LABEL = { style: "Визуал-стиль", storyboard: "Раскадровка", shots: "Шоты" };
+const modTargets = (m) => {
+  const raw = (m.target_stage || "").trim();
+  if (!raw || raw === "none") return [];
+  if (raw === "both") return ["style", "storyboard"];
+  return raw.split(",").filter((s) => MOD_STAGES.includes(s));
+};
 const refUrl = (r) => (typeof r === "string" ? r : r?.url);
 const MOD_META = {
   style: { icon: "🎨", title: "Стиль", accent: "style", upload: true, gen: false,
@@ -185,6 +194,16 @@ function ProjectView({ project, onChange, afterChange }) {
   );
 }
 
+function Resizers({ maxW = 1100 }) {
+  return (
+    <>
+      <NodeResizeControl position="right" variant="line" minWidth={200} maxWidth={maxW} className="rz-edge" />
+      <NodeResizeControl position="bottom" variant="line" minWidth={200} minHeight={90} className="rz-edge" />
+      <NodeResizeControl position="bottom-right" minWidth={200} minHeight={90} className="rz-corner" />
+    </>
+  );
+}
+
 const nodeTypes = {
   stage: StageNode, style: ModifierNode, character: ModifierNode,
   camera: ModifierNode, light: ModifierNode, location: ModifierNode,
@@ -244,19 +263,17 @@ function Board({ project }) {
   }, [nodes, posKey]);
 
   const stageEdges = BRANCH.slice(1).map((st, i) => ({ id: "e" + i, source: BRANCH[i].key, target: st.key }));
-  const targetsFor = (m) => (m.target_stage === "both" ? ["style", "storyboard"]
-    : ["style", "storyboard"].includes(m.target_stage) ? [m.target_stage] : []);
-  const modEdges = modifiers.flatMap((m) => targetsFor(m).map((t) => ({
+  const modEdges = modifiers.flatMap((m) => modTargets(m).map((t) => ({
     id: "m" + m.id + t, source: m.id, target: t, animated: true,
     style: { stroke: "#a78bfa" }, data: { mid: m.id, stage: t },
   })));
 
   const onConnect = async ({ source, target }) => {
     const m = modifiers.find((x) => x.id === source);
-    if (!m || !["style", "storyboard"].includes(target)) return;
-    const cur = m.target_stage;
-    const next = (cur && cur !== "none" && cur !== target) ? "both" : target;
-    await api.patchModifier(m.id, { target_stage: next });
+    if (!m || !MOD_STAGES.includes(target)) return;
+    const set = new Set(modTargets(m));
+    set.add(target);
+    await api.patchModifier(m.id, { target_stage: [...set].join(",") });
     ctx.reloadModifiers();
   };
   const onEdgesDelete = async (deleted) => {
@@ -265,9 +282,9 @@ function Board({ project }) {
       if (!d.mid) continue;
       const m = modifiers.find((x) => x.id === d.mid);
       if (!m) continue;
-      const next = m.target_stage === "both"
-        ? (d.stage === "style" ? "storyboard" : "style") : "none";
-      await api.patchModifier(m.id, { target_stage: next });
+      const set = new Set(modTargets(m));
+      set.delete(d.stage);
+      await api.patchModifier(m.id, { target_stage: [...set].join(",") || "none" });
     }
     ctx.reloadModifiers();
   };
@@ -299,8 +316,7 @@ function StageNode({ data }) {
     <div className={`gnode stage-${data.key} ${open ? "open" : ""} ${status}`}>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
-      <NodeResizeControl position="right" variant="line" minWidth={200} maxWidth={1100} className="rz" />
-      <NodeResizeControl position="bottom-right" minWidth={200} minHeight={90} className="rz-corner" />
+      <Resizers maxW={1100} />
       <div className="gnode-head" title="Перетащи за шапку">
         <span className="gnode-grip">⠿</span>
         <span className={`gnode-n ${status}`}>{status === "done" ? "✓" : data.n}</span>
@@ -327,8 +343,7 @@ function ModifierNode({ data }) {
   return (
     <div className={`gnode ${meta.accent} ${open ? "open" : ""} ${m.enabled ? "on" : "off"}`}>
       <Handle type="source" position={Position.Right} />
-      <NodeResizeControl position="right" variant="line" minWidth={200} maxWidth={700} className="rz" />
-      <NodeResizeControl position="bottom-right" minWidth={200} minHeight={90} className="rz-corner" />
+      <Resizers maxW={700} />
       <div className="gnode-head" title="Перетащи за шапку">
         <span className="gnode-grip">⠿</span>
         <span className="gnode-badge">{meta.icon}</span>
@@ -345,13 +360,21 @@ function ModifierNode({ data }) {
 function ModifierBody({ m, meta }) {
   const { reloadModifiers } = useContext(PC);
   const [text, setText] = useState(m.reference_text || "");
-  const [target, setTarget] = useState(m.target_stage || "storyboard");
+  const [targets, setTargets] = useState(() => new Set(modTargets(m)));
   const [busy, setBusy] = useState("");
   const fileRef = useRef(null);
   const views = (m.refs || []).filter((r) => typeof r === "object");
   const flat = (m.refs || []).filter((r) => typeof r === "string");
 
-  const persist = () => api.patchModifier(m.id, { reference_text: text, target_stage: target });
+  useEffect(() => { setTargets(new Set(modTargets(m))); }, [m.target_stage]);
+  const toggleTarget = async (s) => {
+    const n = new Set(targets);
+    n.has(s) ? n.delete(s) : n.add(s);
+    setTargets(n);
+    await api.patchModifier(m.id, { target_stage: [...n].join(",") || "none" });
+    reloadModifiers();
+  };
+  const persist = () => api.patchModifier(m.id, { reference_text: text, target_stage: [...targets].join(",") || "none" });
   const save = async () => {
     setBusy("save");
     try { await persist(); await reloadModifiers(); } catch (e) { alert(e.message); } finally { setBusy(""); }
@@ -378,13 +401,15 @@ function ModifierBody({ m, meta }) {
       <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)}
         placeholder={"напр. " + meta.ph} />
       {meta.hint && <p className="hint">Сгенерит: {meta.hint}.</p>}
-      <label className="el-label">Подключить к этапу (или тяни ребро мышью)</label>
-      <select value={target} onChange={(e) => setTarget(e.target.value)}>
-        <option value="none">— не подключено —</option>
-        <option value="style">Визуал-стиль</option>
-        <option value="storyboard">Раскадровка</option>
-        <option value="both">Оба</option>
-      </select>
+      <label className="el-label">Подключить к этапам (или тяни ребро мышью)</label>
+      <div className="targets">
+        {MOD_STAGES.map((s) => (
+          <label key={s} className={`tchip ${targets.has(s) ? "on" : ""}`}>
+            <input type="checkbox" checked={targets.has(s)} onChange={() => toggleTarget(s)} />
+            {MOD_STAGE_LABEL[s]}
+          </label>
+        ))}
+      </div>
       {views.length > 0 && (
         <div className="refs labeled">
           {views.map((r, i) => (

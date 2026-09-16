@@ -373,7 +373,9 @@ def gen_video(shot_id: str, db: Session = Depends(get_db)):
     frame_path = _media_fs_path(frame.url)
     camera = {"motion": g.get("camera_preset", "General"),
               "motion_strength": g.get("motion_strength", 0.6)}
-    prompt = (shot.camera_json or {}).get("frame_prompt") or shot.description
+    base = (shot.camera_json or {}).get("frame_prompt") or shot.description
+    # модификаторы, подключённые к этапу «Шоты» (камера/свет/…), влияют на анимацию
+    prompt = _style_prefix(db, _shot_project_id(shot), "shots") + base
     try:
         res = get_video_provider().image_to_video(frame_path, prompt, camera=camera)
     except Exception as e:
@@ -457,8 +459,18 @@ MOD_LABEL = {"style": "Style", "character": "Character", "camera": "Camera",
 ALL_MOD_KINDS = tuple(MOD_LABEL.keys())
 
 
+def _mod_targets(m: Modifier) -> set:
+    """Множество этапов, к которым подключён модификатор (мульти-цель)."""
+    raw = (m.target_stage or "").strip()
+    if not raw or raw == "none":
+        return set()
+    if raw == "both":          # legacy
+        return {"style", "storyboard"}
+    return {s for s in raw.split(",") if s}
+
+
 def _style_prefix(db: Session, project_id: str, stage: str, kinds=ALL_MOD_KINDS) -> str:
-    """Собирает текст из включённых узлов-модификаторов для этапа."""
+    """Собирает текст из включённых узлов-модификаторов, подключённых к этапу."""
     mods = db.query(Modifier).filter(
         Modifier.project_id == project_id, Modifier.kind.in_(kinds),
         Modifier.enabled == True,  # noqa: E712
@@ -466,7 +478,7 @@ def _style_prefix(db: Session, project_id: str, stage: str, kinds=ALL_MOD_KINDS)
     parts = []
     for m in mods:
         t = (m.reference_text or "").strip()
-        if not t or m.target_stage not in (stage, "both"):
+        if not t or stage not in _mod_targets(m):
             continue
         parts.append(f"{MOD_LABEL.get(m.kind, 'Ref')}: {t}")
     return (" | ".join(parts) + ". ") if parts else ""
