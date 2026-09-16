@@ -1,6 +1,6 @@
 import { Fragment, createContext, useContext, useEffect, useRef, useState } from "react";
 import ReactFlow, {
-  Background, Controls, Handle, Position, ReactFlowProvider, useNodesState,
+  Background, Controls, Handle, NodeResizeControl, Position, ReactFlowProvider, useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { api } from "./api";
@@ -18,6 +18,7 @@ const BRANCH = [
   { key: "assembly", n: 5, title: "Сборка" },
 ];
 const stageKey = (s) => (s === "idea" ? "script" : s);
+const DEFAULT_W = { script: 340, style: 320, storyboard: 640, shots: 640, assembly: 320 };
 const refUrl = (r) => (typeof r === "string" ? r : r?.url);
 const MOD_META = {
   style: { icon: "🎨", title: "Стиль", accent: "style", upload: true, gen: false,
@@ -197,15 +198,20 @@ function Board({ project }) {
     try { return JSON.parse(localStorage.getItem(posKey)) || {}; } catch { return {}; }
   })();
 
+  const posOf = (id, def) => (saved[id] ? { x: saved[id].x, y: saved[id].y } : def);
+  const widthOf = (id, def) => saved[id]?.w || def;
+
   const stageNode = (st, i) => ({
     id: st.key, type: "stage",
-    position: saved[st.key] || { x: i * 300, y: 60 },
+    position: posOf(st.key, { x: i * 300, y: 60 }),
+    style: { width: widthOf(st.key, DEFAULT_W[st.key] || 300) },
     data: { key: st.key, n: st.n, title: st.title },
     dragHandle: ".gnode-head",
   });
   const modNode = (m) => ({
     id: m.id, type: MOD_META[m.kind] ? m.kind : "style",
-    position: saved[m.id] || { x: m.pos_x || 120, y: m.pos_y || 340 },
+    position: posOf(m.id, { x: m.pos_x || 120, y: m.pos_y || 340 }),
+    style: { width: widthOf(m.id, 300) },
     data: { id: m.id },
     dragHandle: ".gnode-head",
   });
@@ -218,16 +224,20 @@ function Board({ project }) {
   useEffect(() => {
     setNodes((cur) => {
       const byId = Object.fromEntries(cur.map((n) => [n.id, n]));
-      const keepPos = (n) => (byId[n.id] ? { ...n, position: byId[n.id].position } : n);
-      return [...BRANCH.map(stageNode).map(keepPos), ...modifiers.map(modNode).map(keepPos)];
+      const keep = (n) => (byId[n.id]
+        ? { ...n, position: byId[n.id].position, style: { ...n.style, width: byId[n.id].style?.width || n.style?.width } }
+        : n);
+      return [...BRANCH.map(stageNode).map(keep), ...modifiers.map(modNode).map(keep)];
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modIds]);
 
   useEffect(() => {
-    const pos = {};
-    nodes.forEach((n) => { pos[n.id] = n.position; });
-    try { localStorage.setItem(posKey, JSON.stringify(pos)); } catch { /* ignore */ }
+    const layout = {};
+    nodes.forEach((n) => {
+      layout[n.id] = { x: n.position.x, y: n.position.y, w: n.width || n.style?.width };
+    });
+    try { localStorage.setItem(posKey, JSON.stringify(layout)); } catch { /* ignore */ }
   }, [nodes, posKey]);
 
   const stageEdges = BRANCH.slice(1).map((st, i) => ({ id: "e" + i, source: BRANCH[i].key, target: st.key }));
@@ -286,6 +296,7 @@ function StageNode({ data }) {
     <div className={`gnode stage-${data.key} ${open ? "open" : ""} ${status}`}>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
+      <NodeResizeControl position="right" variant="line" minWidth={200} maxWidth={1100} className="rz" />
       <div className="gnode-head" title="Перетащи за шапку">
         <span className="gnode-grip">⠿</span>
         <span className={`gnode-n ${status}`}>{status === "done" ? "✓" : data.n}</span>
@@ -312,6 +323,7 @@ function ModifierNode({ data }) {
   return (
     <div className={`gnode ${meta.accent} ${open ? "open" : ""} ${m.enabled ? "on" : "off"}`}>
       <Handle type="source" position={Position.Right} />
+      <NodeResizeControl position="right" variant="line" minWidth={200} maxWidth={700} className="rz" />
       <div className="gnode-head" title="Перетащи за шапку">
         <span className="gnode-grip">⠿</span>
         <span className="gnode-badge">{meta.icon}</span>
