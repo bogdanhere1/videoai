@@ -25,6 +25,9 @@
   Nano Banana, Flux, Seedance 2.5 (старт+финал кадр, референсы, звук), Veo, Kling, ElevenLabs Music и др.
   Токен — krea.ai/settings/api-tokens; биллинг — **отдельный API-баланс** (krea.ai/app/api, от $5),
   не compute units веб-плана. `VIDEO_PROVIDER=auto` выбирает Krea, если задан `KREA_API_KEY`.
+  **`KREA_MODE=agent`** (по умолчанию в нашем .env) ведёт генерацию через Krea Agent API — он списывает
+  compute units подписки, API-баланс пополнять не нужно (проверено 26.10.2026: картинка 22 CU, без надбавки).
+  `KREA_MODE=direct` — прямые вызовы `/generate` с API-баланса (точнее и быстрее, но платно отдельно).
 - **Higgsfield API** — картинка (Soul), видео (i2v/t2v), камера, липсинк (Speak v2).
   Доступ через слой `api/app/providers/` — можно нативный Higgsfield или реселлер
   (Segmind / fal.ai / eachlabs) без изменения остального кода.

@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     krea_image_model: str = "google/nano-banana-2.1"
     krea_video_model: str = "bytedance/seedance-2-5"
     krea_music_model: str = "elevenlabs/music-v2.5"
+    # direct — прямые вызовы /generate (списывают API-баланс, нужно пополнение на krea.ai/app/api);
+    # agent  — через Krea Agent API (/agent/send-message): списывает compute units ПЛАНА, API-баланс не нужен.
+    krea_mode: str = "direct"
 
     # Локальное хранилище ассетов (URL Higgsfield живёт 1 час → скачиваем к себе)
     media_dir: str = "./media"

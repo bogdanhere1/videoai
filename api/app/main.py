@@ -59,7 +59,7 @@ app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 @app.get("/health")
 def health():
     return {"status": "ok", "env": settings.app_env, "video_provider": default_provider_name(),
-            "krea_key": bool(settings.krea_api_key.strip()), "higgsfield_key": bool(settings.higgsfield_api_key.strip()),
+            "krea_key": bool(settings.krea_api_key.strip()), "krea_mode": settings.krea_mode, "higgsfield_key": bool(settings.higgsfield_api_key.strip()),
             "elevenlabs_key": bool(settings.elevenlabs_api_key.strip())}
 
 

@@ -22,6 +22,8 @@ nano .env   # заполнить ключи (см. ниже)
 - `KREA_API_KEY` — токен с krea.ai/settings/api-tokens (картинки/видео/музыка)
 - `HIGGSFIELD_API_KEY=key:secret` (со страницы cloud.higgsfield.ai/api-keys) — опционально
 - `VIDEO_PROVIDER=auto` (Krea при наличии ключа, иначе Higgsfield; можно `krea` / `higgsfield`)
+- `KREA_MODE=agent` — через Krea Agent API, списывает compute units подписки (API-баланс не нужен);
+  `direct` — прямые вызовы `/generate` с отдельного API-баланса
 
 > Krea: HTTP-токен списывает с **отдельного API-баланса** (krea.ai/app/api, пополнение от $5) —
 > не с compute units веб-плана; при 402 пополнить. Музыка идёт через Krea (ElevenLabs Music v2.5),
