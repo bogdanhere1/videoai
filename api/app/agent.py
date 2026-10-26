@@ -44,8 +44,22 @@ def _generate(prompt: str) -> ScriptDraft:
     return ScriptDraft.model_validate_json(resp.text)
 
 
-def generate_script(brief: str) -> ScriptDraft:
-    return _generate(f"Идея ролика:\n{brief}\n\nСоставь сценарий.")
+_KIND_RU = {"ad": "рекламный ролик", "social": "вертикальный ролик для соцсетей (Reels/Shorts), быстрый темп, хук в первые 2 с",
+            "explainer": "объясняющий/продуктовый ролик", "story": "короткая история", "music": "музыкальный клип",
+            "intro": "заставка/интро"}
+
+
+def _fmt_text(fmt: dict | None) -> str:
+    if not fmt:
+        return ""
+    kind = _KIND_RU.get(fmt.get("kind"), fmt.get("kind") or "ролик")
+    return (f"\n\nФормат: {kind}; кадр {fmt.get('aspect_ratio', '16:9')}; "
+            f"целевая длительность ~{fmt.get('target_seconds', 30)} с; шот обычно {fmt.get('shot_duration', 5)} с "
+            "(минимум 4 с). Учитывай формат в композиции, темпе и числе сцен.")
+
+
+def generate_script(brief: str, fmt: dict | None = None) -> ScriptDraft:
+    return _generate(f"Идея ролика:\n{brief}{_fmt_text(fmt)}\n\nСоставь сценарий.")
 
 
 _ART_SYSTEM = (
@@ -82,13 +96,13 @@ _SHOT_SYSTEM = (
 )
 
 
-def breakdown_storyboard(brief: str, script_text: str, visuals_summary: str) -> Storyboard:
+def breakdown_storyboard(brief: str, script_text: str, visuals_summary: str, fmt: dict | None = None) -> Storyboard:
     client = _client()
     resp = client.models.generate_content(
         model=settings.gemini_model,
         contents=(
             f"Идея:\n{brief}\n\nСценарий (по сценам):\n{script_text}\n\n"
-            f"Утверждённые визуалы:\n{visuals_summary}\n\nРазбей на шоты."
+            f"Утверждённые визуалы:\n{visuals_summary}{_fmt_text(fmt)}\n\nРазбей на шоты."
         ),
         config=types.GenerateContentConfig(
             system_instruction=_SHOT_SYSTEM,
@@ -103,9 +117,9 @@ def breakdown_storyboard(brief: str, script_text: str, visuals_summary: str) -> 
     return Storyboard.model_validate_json(resp.text)
 
 
-def revise_script(brief: str, previous: ScriptDraft, feedback: str) -> ScriptDraft:
+def revise_script(brief: str, previous: ScriptDraft, feedback: str, fmt: dict | None = None) -> ScriptDraft:
     prompt = (
-        f"Идея ролика:\n{brief}\n\n"
+        f"Идея ролика:\n{brief}{_fmt_text(fmt)}\n\n"
         f"Текущий сценарий (JSON):\n{previous.model_dump_json(indent=2)}\n\n"
         f"Правки от пользователя:\n{feedback}\n\n"
         "Переделай сценарий с учётом правок, сохранив удачное."

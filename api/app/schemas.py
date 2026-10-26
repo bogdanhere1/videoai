@@ -33,7 +33,7 @@ class ShotSpec(BaseModel):
     description: str = Field(description="Что в кадре: действие, кто, ракурс — на языке сценария")
     camera: str = Field(description="Движение/раскадровка камеры, напр. 'slow dolly in', 'handheld'")
     lighting: str = Field(description="Свет: источник и настроение")
-    duration: float = Field(description="Длительность шота в секундах, 2–8")
+    duration: float = Field(description="Длительность шота в секундах, 4–10 (видеомодель делает минимум 4 с)")
     frame_prompt: str = Field(description="Детальный промпт ключевого кадра НА АНГЛИЙСКОМ (для Soul)")
 
 
@@ -43,6 +43,23 @@ class Storyboard(BaseModel):
 
 class ConceptEdit(BaseModel):
     prompt: str
+
+
+class ProjectPatch(BaseModel):
+    title: str | None = None
+    format: dict | None = None  # aspect_ratio, resolution, video_quality, shot_duration, kind, target_seconds
+
+
+class GenerateIn(BaseModel):
+    """Узел «Генератор»: произвольная генерация вне пайплайна."""
+    kind: str = "image"            # image | video
+    prompt: str = ""
+    model: str | None = None
+    aspect_ratio: str | None = None
+    resolution: str | None = None   # картинка: 1K/2K
+    quality: str | None = None      # видео: draft/480p/720p/1080p
+    duration: float | None = None
+    start_image: str | None = None  # /media/… — оживить готовую картинку
 
 
 class ModifierIn(BaseModel):
@@ -69,6 +86,9 @@ class StageSettingIn(BaseModel):
 # ---- Шот-эдитор (Фаза 4) ----
 class ShotPatch(BaseModel):
     description: str | None = None
+    video_quality: str | None = None   # draft | 480p | 720p | 1080p
+    video_model: str | None = None     # переопределение модели видео для шота
+    music_vocals: bool | None = None
     frame_mode: str | None = None   # single | startend
     lighting: str | None = None
     camera_preset: str | None = None

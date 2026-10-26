@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     # Новые ключи (AQ.…) не видят gemini-2.5-*; рабочий дефолт — flash-lite.
     gemini_model: str = "gemini-3.1-flash-lite"
 
-    # native | segmind | fal | eachlabs
-    video_provider: str = "native"
+    # auto (krea если есть ключ, иначе higgsfield) | krea | native/higgsfield
+    video_provider: str = "auto"
     # Формат ключа higgsfield-client: "key:secret" (заголовок Authorization: Key ...)
     higgsfield_api_key: str = ""
     higgsfield_base_url: str = "https://platform.higgsfield.ai"
@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     speak_application: str = "/v1/speak/speak"
 
     elevenlabs_api_key: str = ""
+
+    # Krea public API (api.krea.ai): картинки, видео, музыка. Токен — krea.ai/settings/api-tokens.
+    # Биллинг: ОТДЕЛЬНЫЙ API-баланс (krea.ai/app/api), не compute units веб-плана.
+    krea_api_key: str = ""
+    krea_base_url: str = "https://api.krea.ai"
+    krea_image_model: str = "google/nano-banana-2.1"
+    krea_video_model: str = "bytedance/seedance-2-5"
+    krea_music_model: str = "elevenlabs/music-v2.5"
 
     # Локальное хранилище ассетов (URL Higgsfield живёт 1 час → скачиваем к себе)
     media_dir: str = "./media"

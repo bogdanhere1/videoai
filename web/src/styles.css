@@ -265,3 +265,27 @@ main { flex: 1; position: relative; overflow: hidden; }
 .el audio, .el video { width: 100%; margin-top: 6px; border-radius: 7px; }
 .el video { aspect-ratio: 16/9; background: #000; }
 .el .hint { font-size: 11px; color: #64748b; margin: 4px 0 0; line-height: 1.4; }
+
+/* ---- узел «Генератор» + галерея результатов ---- */
+.gnode.generator { border-color: rgba(251,146,60,.55); }
+.gnode.generator select, .gnode.generator textarea, .gnode.generator input {
+  width: 100%; font: inherit; padding: 6px 8px; border-radius: 7px;
+  background: #0b1120; color: #e2e8f0; border: 1px solid #334155;
+}
+.gen-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 6px 0; }
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }
+.gallery figure { margin: 0; background: #0b1120; border-radius: 8px; overflow: hidden; border: 1px solid #1e293b; }
+.gallery img, .gallery video { width: 100%; display: block; aspect-ratio: 16/9; object-fit: cover; }
+.gallery figcaption { display: flex; justify-content: space-between; align-items: center; gap: 4px; padding: 4px 6px; font-size: 11px; color: #94a3b8; }
+.gallery figcaption span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gallery figcaption button, .gallery figcaption a { font-size: 11px; padding: 2px 6px; margin-left: 2px; color: #e2e8f0; text-decoration: none; }
+/* ---- формат проекта в настройках ---- */
+.fmt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fmt-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #94a3b8; }
+.fmt-grid select, .fmt-grid input, .api-grid select {
+  font: inherit; padding: 6px 8px; border-radius: 7px; background: #0b1120; color: #e2e8f0; border: 1px solid #334155; width: 100%;
+}
+.chk { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #94a3b8; margin: 4px 0; }
+.chk input { accent-color: #6366f1; width: auto; }
+.row.tight { gap: 4px; }
+.el select { width: 100%; font: inherit; padding: 6px 8px; border-radius: 7px; background: #0b1120; color: #e2e8f0; border: 1px solid #334155; margin-bottom: 4px; }

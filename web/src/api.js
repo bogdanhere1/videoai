@@ -52,6 +52,36 @@ export const api = {
   deleteModifier: (mid) => fetch(`/api/modifiers/${mid}`, { method: "DELETE" }).then(j),
   generateViews: (mid) =>
     fetch(`/api/modifiers/${mid}/views:generate`, { method: "POST" }).then(j),
+  patchProject: (id, body) =>
+    fetch(`/api/projects/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(j),
+  getCatalog: () => fetch("/api/catalog").then(j),
+  freeGenerate: (mid, body) =>
+    fetch(`/api/modifiers/${mid}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(j),
+  deleteModifierRef: (mid, index) =>
+    fetch(`/api/modifiers/${mid}/refs/${index}`, { method: "DELETE" }).then(j),
+  uploadConcept: (assetId, file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetch(`/api/concepts/${assetId}:upload`, { method: "POST", body: fd }).then(j);
+  },
+  uploadFrame: (shotId, variant, file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetch(`/api/shots/${shotId}:frame-upload?variant=${variant}`, { method: "POST", body: fd }).then(j);
+  },
+  uploadShotVideo: (shotId, file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetch(`/api/shots/${shotId}:video-upload`, { method: "POST", body: fd }).then(j);
+  },
   getSettings: (id) => fetch(`/api/projects/${id}/settings`).then(j),
   putSetting: (id, stage, cfg) =>
     fetch(`/api/projects/${id}/settings/${stage}`, {

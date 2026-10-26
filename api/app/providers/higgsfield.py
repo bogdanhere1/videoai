@@ -30,6 +30,13 @@ def extract_url(result) -> str | None:
     return result.get("url") or result.get("result_url")
 
 
+# Соотношение сторон → width_and_height Soul (1536x1536 подтверждено; остальные — по той же сетке).
+# Допустимые Soul значения (валидатор 26.10.2026): 2048x1152, 1152x2048, 1536x1536, 2048x1536, 1536x2048,
+# 2016x1344, 1344x2016, 1696x960, 960x1696, 1536x1152, 1152x1536, 1632x1088, 1088x1632, 1680x1120, 1120x1680, 2048x2048
+_AR_TO_WH = {"16:9": "2048x1152", "9:16": "1152x2048", "1:1": "1536x1536", "4:5": "1152x1536",
+             "4:3": "2048x1536", "21:9": "2016x1344"}
+
+
 class HiggsfieldProvider(VideoProvider):
     name = "higgsfield"
 
@@ -56,8 +63,15 @@ class HiggsfieldProvider(VideoProvider):
         quality: str = "1080p",
         batch_size: int = 1,
         seed: int | None = None,
+        model: str | None = None,
+        aspect_ratio: str | None = None,
+        resolution: str | None = None,
+        image_urls: list[str] | None = None,
         **kwargs,
     ) -> GenResult:
+        if aspect_ratio in _AR_TO_WH:
+            width_and_height = _AR_TO_WH[aspect_ratio]
+        # model/resolution/image_urls — общий интерфейс (Krea); Soul их не принимает → игнорируем.
         # Подтверждённая схема Soul: тело = {"params": {...}}, width_and_height обязателен.
         params = {
             "prompt": prompt,
@@ -69,16 +83,15 @@ class HiggsfieldProvider(VideoProvider):
             params["seed"] = seed
         if soul_id:
             params["soul_id"] = soul_id  # точное имя поля Soul ID уточним при обучении лица
-        params.update(kwargs)
         result = self._client.subscribe(settings.soul_application, {"params": params})
         return GenResult(url=extract_url(result), raw=result)
 
     def image_to_video(self, image_url, prompt, *, camera=None, **kwargs) -> GenResult:
         # Схема DoP уточняется на Фазе 4 (та же обёртка params).
+        # end_image/reference_images/duration/model и т.п. — поля общего интерфейса (Krea), DoP их не знает.
         params = {"input_image_url": self._ensure_public(image_url), "prompt": prompt}
         if camera:
             params.update(camera)
-        params.update(kwargs)
         result = self._client.subscribe(settings.dop_application, {"params": params})
         return GenResult(url=extract_url(result), raw=result)
 
@@ -87,7 +100,6 @@ class HiggsfieldProvider(VideoProvider):
         params = {
             "input_image_url": self._ensure_public(image_url),
             "audio_url": self._ensure_public(audio_url),
-            **kwargs,
         }
         result = self._client.subscribe(settings.speak_application, {"params": params})
         return GenResult(url=extract_url(result), raw=result)

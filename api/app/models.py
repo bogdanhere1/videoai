@@ -63,6 +63,8 @@ class Project(Base):
     owner: Mapped[str] = mapped_column(String, default="")
     brief_text: Mapped[str] = mapped_column(Text, default="")
     logline: Mapped[str] = mapped_column(Text, default="")
+    # формат ролика: aspect_ratio, resolution, video_quality, shot_duration, kind, target_seconds
+    settings_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=True)
     stage: Mapped[Stage] = mapped_column(Enum(Stage), default=Stage.idea)
     status: Mapped[Status] = mapped_column(Enum(Status), default=Status.draft)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

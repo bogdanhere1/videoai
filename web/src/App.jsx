@@ -42,6 +42,8 @@ const MOD_META = {
     ph: "35mm lens, low angle, shallow depth of field, slow dolly in" },
   light: { icon: "💡", title: "Свет", accent: "light", upload: false, gen: false,
     ph: "golden hour, soft rim light, moody, high contrast" },
+  generator: { icon: "✨", title: "Генератор", accent: "generator", upload: false, gen: false, free: true,
+    ph: "poster for a coffee brand, bold typography, 9:16" },
 };
 
 const PC = createContext(null);
@@ -103,6 +105,7 @@ function ProjectView({ project, onChange, afterChange }) {
   const [expanded, setExpanded] = useState(() => new Set([stageKey(project.stage)]));
   const [showSettings, setShowSettings] = useState(false);
   const [modifiers, setModifiers] = useState([]);
+  const [catalog, setCatalog] = useState(null);
 
   const reloadModifiers = () => api.listModifiers(project.id).then(setModifiers).catch(() => {});
   useEffect(() => {
@@ -112,10 +115,11 @@ function ProjectView({ project, onChange, afterChange }) {
   useEffect(() => {
     api.getVoices().then(setVoices).catch(() => {});
     api.getCameraPresets().then(setPresets).catch(() => {});
+    api.getCatalog().then(setCatalog).catch(() => {});
   }, []);
 
   const addModifierNode = async (kind) => {
-    const m = await api.createModifier(project.id, kind, "storyboard");
+    const m = await api.createModifier(project.id, kind, kind === "generator" ? "none" : "storyboard");
     await reloadModifiers();
     setExpanded((prev) => new Set(prev).add(m.id));
   };
@@ -165,7 +169,7 @@ function ProjectView({ project, onChange, afterChange }) {
     project, onChange, busy, voices, presets,
     openShot, setOpenShot, editKey, setEditKey,
     startEdit, commitEdit, run, shotsCount, stageStatus,
-    expanded, toggleExpand, modifiers, reloadModifiers,
+    expanded, toggleExpand, modifiers, reloadModifiers, catalog,
   };
 
   return (
@@ -179,7 +183,8 @@ function ProjectView({ project, onChange, afterChange }) {
             <button onClick={() => addModifierNode("location")}>+ Локация</button>
             <button onClick={() => addModifierNode("camera")}>+ Камера</button>
             <button onClick={() => addModifierNode("light")}>+ Свет</button>
-            <span className="cost">≈ ${project.cost_usd ?? 0} · API</span>
+            <button onClick={() => addModifierNode("generator")}>+ Генератор</button>
+            <span className="cost" title="оценка расходов API: $ и compute units Krea">≈ ${project.cost_usd ?? 0} · {project.compute_units ?? 0} CU</span>
             <button onClick={() => setShowSettings(true)}>⚙ Настройки</button>
           </div>
         </div>
@@ -187,7 +192,8 @@ function ProjectView({ project, onChange, afterChange }) {
           <Board key={project.id} project={project} />
         </ReactFlowProvider>
         {showSettings && (
-          <SettingsDrawer projectId={project.id} onClose={() => setShowSettings(false)} />
+          <SettingsDrawer project={project} catalog={catalog} onClose={() => setShowSettings(false)}
+            onProjectChange={(p) => { onChange(p); afterChange(); }} />
         )}
       </div>
     </PC.Provider>
@@ -206,7 +212,7 @@ function Resizers({ maxW = 1100 }) {
 
 const nodeTypes = {
   stage: StageNode, style: ModifierNode, character: ModifierNode,
-  camera: ModifierNode, light: ModifierNode, location: ModifierNode,
+  camera: ModifierNode, light: ModifierNode, location: ModifierNode, generator: ModifierNode,
 };
 
 function Board({ project }) {
@@ -347,12 +353,16 @@ function ModifierNode({ data }) {
       <div className="gnode-head" title="Перетащи за шапку">
         <span className="gnode-grip">⠿</span>
         <span className="gnode-badge">{meta.icon}</span>
-        <span className="gnode-title">{meta.title}{m.enabled ? "" : " (выкл)"}</span>
+        <span className="gnode-title">{meta.title}{m.enabled || meta.free ? "" : " (выкл)"}</span>
         <button className="gnode-toggle nodrag" onClick={() => ctx.toggleExpand(data.id)}>
           {open ? "▾" : "▸"}
         </button>
       </div>
-      {open && <div className="gnode-body nodrag"><ModifierBody m={m} meta={meta} /></div>}
+      {open && (
+        <div className="gnode-body nodrag">
+          {meta.free ? <GeneratorBody m={m} /> : <ModifierBody m={m} meta={meta} />}
+        </div>
+      )}
     </div>
   );
 }
@@ -446,7 +456,91 @@ function ModifierBody({ m, meta }) {
   );
 }
 
-function FrameSlot({ url, label, busy, onGen, dur }) {
+function GeneratorBody({ m }) {
+  const { reloadModifiers, catalog, project } = useContext(PC);
+  const fmt = project.format || {};
+  const [prompt, setPrompt] = useState(m.reference_text || "");
+  const [kind, setKind] = useState("image");
+  const [model, setModel] = useState("");
+  const [aspect, setAspect] = useState(fmt.aspect_ratio || "16:9");
+  const [quality, setQuality] = useState(fmt.video_quality || "draft");
+  const [duration, setDuration] = useState(fmt.shot_duration || 5);
+  const [busy, setBusy] = useState("");
+  const models = kind === "video" ? (catalog?.video || []) : (catalog?.image || []);
+  const refs = m.refs || [];
+
+  const gen = async (startImage) => {
+    setBusy("gen");
+    try {
+      await api.freeGenerate(m.id, {
+        kind: startImage ? "video" : kind, prompt, model: model || null, aspect_ratio: aspect,
+        quality, duration: Number(duration), start_image: startImage || null,
+      });
+      await reloadModifiers();
+    } catch (e) { alert("Генерация: " + e.message); } finally { setBusy(""); }
+  };
+  const delRef = async (i) => { await api.deleteModifierRef(m.id, i); reloadModifiers(); };
+  const del = async () => {
+    if (confirm("Удалить узел «Генератор» со всеми результатами?")) { await api.deleteModifier(m.id); reloadModifiers(); }
+  };
+
+  return (
+    <>
+      <textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)}
+        placeholder="Что сгенерировать вне пайплайна: постер, обложка, отдельный клип, оживить картинку… (лучше EN)" />
+      <div className="gen-grid">
+        <select value={kind} onChange={(e) => { setKind(e.target.value); setModel(""); }}>
+          <option value="image">Картинка</option>
+          <option value="video">Видео (текст → видео)</option>
+        </select>
+        <select value={model} onChange={(e) => setModel(e.target.value)}>
+          <option value="">модель по умолчанию</option>
+          {models.map((mm) => <option key={mm.id} value={mm.id}>{mm.name}</option>)}
+        </select>
+        <select value={aspect} onChange={(e) => setAspect(e.target.value)}>
+          {(catalog?.aspects || ["16:9"]).map((a) => <option key={a}>{a}</option>)}
+        </select>
+        {kind === "video" ? (
+          <select value={quality} onChange={(e) => setQuality(e.target.value)}>
+            {(catalog?.video_quality || ["draft"]).map((q) => <option key={q}>{q}</option>)}
+          </select>
+        ) : <span />}
+        {kind === "video" && (
+          <input type="number" min="4" max="30" value={duration} title="длительность, с"
+            onChange={(e) => setDuration(e.target.value)} />
+        )}
+      </div>
+      <div className="row">
+        <button className="primary" disabled={!!busy || !prompt.trim()} onClick={() => gen(null)}>
+          {busy ? "Генерирую…" : "✨ Сгенерировать"}
+        </button>
+        <button onClick={del}>🗑</button>
+      </div>
+      {refs.length > 0 && (
+        <div className="gallery">
+          {refs.map((r, i) => (
+            <figure key={i}>
+              {r.label === "video" ? <video src={r.url} controls /> : <img src={r.url} alt="" />}
+              <figcaption>
+                <span title={r.prompt}>{r.model || r.label}</span>
+                <span>
+                  {r.label !== "video" && (
+                    <button title="Оживить картинку (видео)" disabled={!!busy} onClick={() => gen(r.url)}>▶</button>
+                  )}
+                  <a href={r.url} download title="Скачать">↓</a>
+                  <button onClick={() => delRef(i)} title="Удалить">✕</button>
+                </span>
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function FrameSlot({ url, label, busy, onGen, onUpload, dur }) {
+  const fileRef = useRef(null);
   return (
     <div className="frame-slot">
       <div className="shot-media">
@@ -454,9 +548,18 @@ function FrameSlot({ url, label, busy, onGen, dur }) {
         {dur ? <span className="dur">{dur}с</span> : null}
         <span className="slot-label">{label}</span>
       </div>
-      <button className="wfull" disabled={busy} onClick={onGen}>
-        {busy ? "…" : url ? "↻ " + label : label}
-      </button>
+      <div className="row tight">
+        <button className="wfull" disabled={busy} onClick={onGen}>
+          {busy ? "…" : url ? "↻ " + label : label}
+        </button>
+        {onUpload && (
+          <>
+            <button title="Загрузить свой кадр" disabled={busy} onClick={() => fileRef.current?.click()}>📎</button>
+            <input ref={fileRef} type="file" accept="image/*" hidden
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = ""; }} />
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -468,8 +571,8 @@ function SequencePlayer({ scenes }) {
     .filter((sh) => sh.status !== "rejected" && sh.video_url)
     .map((sh) => sh.video_url));
   if (urls.length === 0) {
-    return <p className="hint">Видео шотов ещё нет — плеер появится, когда сгенерируешь
-      ролики шотов (ждёт баланс Higgsfield).</p>;
+    return <p className="hint">Видео шотов ещё нет — открой ⚙ Элементы у шота и нажми «Видео»
+      (или загрузи своё). Плеер проиграет все шоты подряд.</p>;
   }
   const playFrom = (n) => {
     setIdx(n);
@@ -554,6 +657,8 @@ function StageBody({ k }) {
                         {busy === "concept:" + cc.id ? "Генерирую…" : cc.url ? "↻ Перегенерировать" : "Сгенерировать"}
                       </button>
                       <button onClick={() => c.startEdit("concept:" + cc.id)}>✎</button>
+                      <UploadBtn title="Своя картинка" accept="image/*"
+                        onFile={(f) => c.run("concept:" + cc.id, async () => { await api.uploadConcept(cc.id, f); return api.getProject(project.id); })} />
                       {cc.url && (
                         <>
                           <button onClick={() => c.run("concept", async () => { await api.decideAsset(cc.id, "approve"); return api.getProject(project.id); })}>✓</button>
@@ -582,13 +687,14 @@ function StageBody({ k }) {
         <button disabled={busy} onClick={() => c.run("storyboard", () => api.generateStoryboard(project.id))}>
           {busy === "storyboard" ? "…" : "↻ Пересобрать раскадровку"}
         </button>
-        <p className="hint">Только статичные кадры. На шот: один кадр или старт+финал
-          (общий сид → консистентная сцена, меняется поза/действие).</p>
+        <p className="hint">Только статичные кадры. На шот: один кадр или старт+финал (второй кадр пары
+          получает первый как референс → одна сцена, меняется поза/действие). 📎 — свой кадр.</p>
         <div className="shots-strip">
           {project.scenes.flatMap((sc) => (sc.shots || []).map((sh, i) => {
             const mode = sh.frame_mode || "single";
             const setMode = (mm) => c.run("shot", async () => { await api.patchShot(sh.id, { frame_mode: mm }); return api.getProject(project.id); });
             const genFrame = (v) => c.run("frame:" + sh.id + v, async () => { await api.generateFrame(sh.id, v); return api.getProject(project.id); });
+            const upFrame = (v) => (f) => c.run("frame:" + sh.id + v, async () => { await api.uploadFrame(sh.id, v, f); return api.getProject(project.id); });
             return (
               <div key={sh.id} className={`shot ${sh.status}`}>
                 {i === 0 && <div className="strip-scene">Сцена {sc.order}</div>}
@@ -598,13 +704,13 @@ function StageBody({ k }) {
                 </div>
                 {mode === "single" ? (
                   <FrameSlot url={sh.frame_single || sh.frame_url} label="Кадр" dur={sh.duration}
-                    busy={busy === "frame:" + sh.id + "single"} onGen={() => genFrame("single")} />
+                    busy={busy === "frame:" + sh.id + "single"} onGen={() => genFrame("single")} onUpload={upFrame("single")} />
                 ) : (
                   <div className="frame-pair">
                     <FrameSlot url={sh.frame_start} label="Старт"
-                      busy={busy === "frame:" + sh.id + "start"} onGen={() => genFrame("start")} />
+                      busy={busy === "frame:" + sh.id + "start"} onGen={() => genFrame("start")} onUpload={upFrame("start")} />
                     <FrameSlot url={sh.frame_end} label="Финал"
-                      busy={busy === "frame:" + sh.id + "end"} onGen={() => genFrame("end")} />
+                      busy={busy === "frame:" + sh.id + "end"} onGen={() => genFrame("end")} onUpload={upFrame("end")} />
                   </div>
                 )}
                 <div className="shot-body">
@@ -669,8 +775,8 @@ function StageBody({ k }) {
         {busy === "assemble" ? "Собираю…" : project.final_url ? "↻ Пересобрать ролик" : "Собрать ролик"}
       </button>
       <p className="hint" style={{ marginTop: 8 }}>
-        Склейка шотов + сведение звука через ffmpeg. Видео шотов — Higgsfield (ждёт баланс);
-        без видео шот берётся как статичный кадр.
+        Склейка шотов + сведение звука через ffmpeg. Без видео шот берётся как статичный кадр
+        на свою длительность.
       </p>
       {project.final_url && (
         <video controls src={project.final_url} style={{ width: "100%", marginTop: 12, borderRadius: 10 }} />
@@ -679,6 +785,17 @@ function StageBody({ k }) {
   );
 
   return null;
+}
+
+function UploadBtn({ title, accept, onFile, label = "📎" }) {
+  const ref = useRef(null);
+  return (
+    <>
+      <button title={title} onClick={() => ref.current?.click()}>{label}</button>
+      <input ref={ref} type="file" accept={accept} hidden
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
+    </>
+  );
 }
 
 function EditBox({ initial, busy, onSave, onCancel }) {
@@ -766,7 +883,18 @@ function ShotEditor({ shot }) {
     voice_id: shot.voice_id || "",
     music_prompt: shot.music_prompt || "",
     sfx_prompt: shot.sfx_prompt || "",
+    video_quality: shot.video_quality || "",
+    video_model: shot.video_model || "",
+    music_vocals: !!shot.music_vocals,
   });
+  const { catalog } = useContext(PC);
+  const vidRef = useRef(null);
+  const onVideoFile = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setBusy("upload");
+    try { await api.uploadShotVideo(shot.id, file); onChange(await api.getProject(projectId)); }
+    catch (err) { alert(err.message); } finally { setBusy(""); e.target.value = ""; }
+  };
   const [busy, setBusy] = useState("");
   const upd = (k, v) => setF((p) => ({ ...p, [k]: v }));
 
@@ -819,6 +947,8 @@ function ShotEditor({ shot }) {
           <label>🎵 Музыка</label>
           <input value={f.music_prompt} onChange={(e) => upd("music_prompt", e.target.value)}
             placeholder="напр. calm lo-fi piano" />
+          <label className="chk"><input type="checkbox" checked={f.music_vocals}
+            onChange={(e) => upd("music_vocals", e.target.checked)} /> с вокалом</label>
           <div className="row">{B("music", shot.music_url ? "↻ Музыка" : "Музыка")}</div>
           {shot.music_url && <audio controls src={shot.music_url} />}
           <label>🔊 SFX</label>
@@ -829,12 +959,26 @@ function ShotEditor({ shot }) {
         </div>
         <div className="el">
           <label>🎬 Видео / Липсинк</label>
+          <select value={f.video_quality} onChange={(e) => upd("video_quality", e.target.value)}>
+            <option value="">качество как в проекте ({project.format?.video_quality || "720p"})</option>
+            {(catalog?.video_quality || []).map((q) => (
+              <option key={q} value={q}>{q}{q === "draft" ? " — черновик, ~3× дешевле" : ""}</option>
+            ))}
+          </select>
+          <select value={f.video_model} onChange={(e) => upd("video_model", e.target.value)}>
+            <option value="">модель по умолчанию</option>
+            {(catalog?.video || []).map((mm) => <option key={mm.id} value={mm.id}>{mm.name}</option>)}
+          </select>
           <div className="row">
-            {B("video", shot.video_url ? "↻ Видео (DoP)" : "Видео (DoP)")}
-            {B("lipsync", "Липсинк")}
+            {B("video", shot.video_url ? "↻ Видео" : "🎬 Видео")}
+            {B("lipsync", "🗣 Липсинк")}
+            <button disabled={!!busy} title="Загрузить своё видео" onClick={() => vidRef.current?.click()}>📎</button>
+            <input ref={vidRef} type="file" accept="video/*" hidden onChange={onVideoFile} />
           </div>
           {shot.video_url && <video controls src={shot.video_url} />}
-          <p className="hint">Видео/липсинк — Higgsfield, ждут баланс. Музыка — тариф ElevenLabs.</p>
+          <p className="hint">{shot.frame_mode === "startend"
+            ? "Старт+Финал → интерполяция между двумя кадрами."
+            : "Кадр → видео; подключённые референсы (персонаж/локация) уходят в модель."} Липсинк: кадр + озвучка.</p>
         </div>
       </div>
       <button className="primary" disabled={!!busy} onClick={save}>

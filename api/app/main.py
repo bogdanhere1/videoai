@@ -10,9 +10,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from . import agent, assembly, storage
+from .catalog import FORMAT_DEFAULTS, catalog
 from .config import settings
 from .db import Base, engine, get_db
 from .models import (
@@ -21,10 +23,13 @@ from .models import (
 )
 from .presets import CAMERA_PRESETS
 from .providers import elevenlabs as el
-from .providers import get_video_provider
+from .providers import default_provider_name, get_video_provider
+from .providers.base import VideoProvider
+from .providers.higgsfield import HiggsfieldProvider
+from .providers.krea import KreaProvider, estimate_cu
 from .schemas import (
-    ApprovalIn, ConceptEdit, IdeaIn, ModifierIn, ModifierPatch, SceneEdit, ScriptDraft,
-    ScriptReviseIn, ShotPatch, StageSettingIn, TranscriptOut,
+    ApprovalIn, ConceptEdit, GenerateIn, IdeaIn, ModifierIn, ModifierPatch, ProjectPatch, SceneEdit,
+    ScriptDraft, ScriptReviseIn, ShotPatch, StageSettingIn, TranscriptOut,
 )
 
 STAGE_KEYS = ["idea", "script", "style", "storyboard", "shots", "assembly"]
@@ -35,7 +40,16 @@ os.makedirs(settings.media_dir, exist_ok=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)  # Alembic — позже
+    _migrate()
     yield
+
+
+def _migrate() -> None:
+    """Мини-миграции без Alembic: новые колонки в уже существующих таблицах."""
+    cols = {c["name"] for c in inspect(engine).get_columns("projects")}
+    if "settings_json" not in cols:
+        with engine.begin() as con:
+            con.execute(text("ALTER TABLE projects ADD COLUMN settings_json JSON"))
 
 
 app = FastAPI(title="AI Video Studio API", lifespan=lifespan)
@@ -44,7 +58,9 @@ app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "env": settings.app_env, "video_provider": settings.video_provider}
+    return {"status": "ok", "env": settings.app_env, "video_provider": default_provider_name(),
+            "krea_key": bool(settings.krea_api_key.strip()), "higgsfield_key": bool(settings.higgsfield_api_key.strip()),
+            "elevenlabs_key": bool(settings.elevenlabs_api_key.strip())}
 
 
 # ---------- Проекты ----------
@@ -61,6 +77,26 @@ def create_project(title: str = "Untitled", db: Session = Depends(get_db)):
 def list_projects(db: Session = Depends(get_db)):
     rows = db.query(Project).order_by(Project.created_at.desc()).all()
     return [{"id": p.id, "title": p.title, "stage": p.stage, "status": p.status} for p in rows]
+
+
+@app.patch("/api/projects/{project_id}")
+def patch_project(project_id: str, body: ProjectPatch, db: Session = Depends(get_db)):
+    """Название и формат ролика (aspect_ratio, resolution, video_quality, shot_duration, kind, target_seconds)."""
+    project = _get_project(db, project_id)
+    if body.title is not None and body.title.strip():
+        project.title = body.title.strip()
+    if body.format is not None:
+        cur = dict(project.settings_json or {})
+        cur.update({k: v for k, v in body.format.items() if k in FORMAT_DEFAULTS})
+        project.settings_json = cur
+    db.commit()
+    return _project_dto(project, db)
+
+
+@app.get("/api/catalog")
+def get_catalog():
+    """Провайдеры/модели/форматы для настроек (курируемый список Krea + Gemini)."""
+    return catalog()
 
 
 @app.get("/api/projects/{project_id}")
@@ -96,7 +132,7 @@ def generate_script(project_id: str, db: Session = Depends(get_db)):
     if not project.brief_text:
         raise HTTPException(400, "Сначала задай идею (brief).")
     try:
-        draft = agent.generate_script(project.brief_text)
+        draft = agent.generate_script(project.brief_text, _project_format(project))
     except Exception as e:
         raise HTTPException(502, f"Gemini error: {e}")
     _apply_draft(db, project, draft)
@@ -108,7 +144,7 @@ def revise_script(project_id: str, body: ScriptReviseIn, db: Session = Depends(g
     project = _get_project(db, project_id)
     previous = _draft_from_db(project)
     try:
-        draft = agent.revise_script(project.brief_text, previous, body.feedback)
+        draft = agent.revise_script(project.brief_text, previous, body.feedback, _project_format(project))
     except Exception as e:
         raise HTTPException(502, f"Gemini error: {e}")
     _apply_draft(db, project, draft)
@@ -171,10 +207,15 @@ def generate_concept(asset_id: str, db: Session = Depends(get_db)):
     if not asset or asset.type != AssetType.concept:
         raise HTTPException(404, "Концепт не найден")
     prompt = _style_prefix(db, asset.project_id, "style") + (asset.params_json or {}).get("prompt", "")
+    prov, model, fmt = _gen_ctx(db, asset.project_id, "style")
+    refs = _ref_images(db, asset.project_id, "style")
+    if refs:
+        prompt += " Use the attached reference images for style and character consistency."
     try:
-        res = get_video_provider().generate_image(prompt)
+        res = prov.generate_image(prompt, model=model, aspect_ratio=fmt["aspect_ratio"],
+                                  resolution=fmt["resolution"], image_urls=refs)
     except Exception as e:
-        raise HTTPException(502, f"Higgsfield error: {e}")
+        raise HTTPException(502, f"{prov.name} error: {e}")
     if not res.url:
         raise HTTPException(502, "Провайдер не вернул URL картинки")
     try:
@@ -183,9 +224,9 @@ def generate_concept(asset_id: str, db: Session = Depends(get_db)):
         raise HTTPException(502, f"Не удалось скачать результат: {e}")
     asset.url = stored
     asset.version += 1
-    asset.source = "higgsfield"
+    asset.source = prov.name
     asset.approved = False
-    _log_usage(db, asset.project_id, "concept", "higgsfield", COST_USD["concept"])
+    _log_usage(db, asset.project_id, "concept", prov.name, COST_USD["concept"], cu=estimate_cu("image"))
     db.commit()
     return _asset_dto(asset)
 
@@ -206,7 +247,7 @@ def generate_storyboard(project_id: str, db: Session = Depends(get_db)):
         f"{(c.params_json or {}).get('prompt', '')}" for c in concepts
     ) or "(визуалы ещё не заданы)"
     try:
-        board = agent.breakdown_storyboard(project.brief_text, script_text, visuals)
+        board = agent.breakdown_storyboard(project.brief_text, script_text, visuals, _project_format(project))
     except Exception as e:
         raise HTTPException(502, f"Gemini error: {e}")
     by_order = {s.order: s for s in scenes}
@@ -249,11 +290,23 @@ def generate_frame(shot_id: str, variant: str = "single", db: Session = Depends(
         raise HTTPException(400, "variant: single|start|end")
     base = (shot.camera_json or {}).get("frame_prompt") or shot.description
     prompt = _style_prefix(db, _shot_project_id(shot), "storyboard") + base + _FRAME_HINT[variant]
-    seed = _stable_seed(shot_id)  # общий сид старта/финала одного шота → консистентность
+    seed = _stable_seed(shot_id)  # общий сид старта/финала одного шота (где модель принимает seed)
+    pid = _shot_project_id(shot)
+    prov, model, fmt = _gen_ctx(db, pid, "storyboard")
+    refs = _ref_images(db, pid, "storyboard")
+    # второй кадр пары получает первый как референс → одна сцена, меняется только поза/действие
+    have = _frames_by_variant(db, shot_id)
+    sibling = have.get("start") if variant == "end" else (have.get("end") if variant == "start" else None)
+    if sibling and sibling.url:
+        refs = [_media_fs_path(sibling.url)] + refs
+        prompt += " Keep the exact same scene, character, wardrobe and lighting as the attached reference frame."
+    elif refs:
+        prompt += " Use the attached reference images for style and character consistency."
     try:
-        res = get_video_provider().generate_image(prompt, seed=seed)
+        res = prov.generate_image(prompt, seed=seed, model=model, aspect_ratio=fmt["aspect_ratio"],
+                                  resolution=fmt["resolution"], image_urls=refs)
     except Exception as e:
-        raise HTTPException(502, f"Higgsfield error: {e}")
+        raise HTTPException(502, f"{prov.name} error: {e}")
     if not res.url:
         raise HTTPException(502, "Провайдер не вернул URL кадра")
     try:
@@ -266,9 +319,9 @@ def generate_frame(shot_id: str, variant: str = "single", db: Session = Depends(
         frame.url, frame.approved = stored, False
         frame.version += 1
     else:
-        db.add(Asset(shot_id=shot_id, type=AssetType.frame, url=stored, source="higgsfield",
+        db.add(Asset(shot_id=shot_id, type=AssetType.frame, url=stored, source=prov.name,
                      params_json={"variant": variant}))
-    _log_usage(db, _shot_project_id(shot), "frame", "higgsfield", COST_USD["frame"])
+    _log_usage(db, pid, "frame", prov.name, COST_USD["frame"], cu=estimate_cu("image"))
     db.commit()
     return _shot_dto(db, shot)
 
@@ -300,7 +353,7 @@ def patch_shot(shot_id: str, body: ShotPatch, db: Session = Depends(get_db)):
     if body.frame_mode is not None:
         g["frame_mode"] = body.frame_mode
     for field in ("camera_preset", "motion_strength", "voice_text", "voice_id",
-                  "music_prompt", "sfx_prompt"):
+                  "music_prompt", "sfx_prompt", "video_quality", "video_model", "music_vocals"):
         val = getattr(body, field)
         if val is not None:
             g[field] = val
@@ -354,60 +407,148 @@ def gen_music(shot_id: str, db: Session = Depends(get_db)):
     prompt = g.get("music_prompt", "").strip()
     if not prompt:
         raise HTTPException(400, "Пустой промпт музыки")
-    try:
-        audio = el.music(prompt, length_ms=int((shot.duration or 10) * 1000))
-    except Exception as e:
-        raise HTTPException(502, f"ElevenLabs music error: {e}")
-    _save_shot_asset(db, shot_id, AssetType.music, storage.save_bytes(audio, ".mp3"), "elevenlabs")
-    _log_usage(db, _shot_project_id(shot), "music", "elevenlabs", COST_USD["music"])
+    length_ms = int((shot.duration or 10) * 1000)
+    src, krea = _audio_route(db, _shot_project_id(shot))
+    if src == "krea":
+        try:
+            res = krea.music(prompt, length_ms=max(length_ms, 5000), instrumental=not g.get("music_vocals", False))
+        except Exception as e:
+            raise HTTPException(502, f"Krea music error: {e}")
+        if not res.url:
+            raise HTTPException(502, "Krea не вернул URL музыки")
+        url, cu = storage.save_from_url(res.url, ".mp3"), estimate_cu("music")
+    else:
+        try:
+            audio = el.music(prompt, length_ms=length_ms)
+        except Exception as e:
+            raise HTTPException(502, f"ElevenLabs music error: {e}")
+        url, cu = storage.save_bytes(audio, ".mp3"), 0
+    _save_shot_asset(db, shot_id, AssetType.music, url, src)
+    _log_usage(db, _shot_project_id(shot), "music", src, COST_USD["music"], cu=cu)
     db.commit()
     return _shot_dto(db, shot)
 
 
 @app.post("/api/shots/{shot_id}/video:generate")
 def gen_video(shot_id: str, db: Session = Depends(get_db)):
+    """Анимация шота. single: кадр → видео (+референсы персонажа/локации);
+    startend: старт+финал → интерполяция между кадрами (Seedance end_image).
+    Камера/свет/подключённые модификаторы складываются в промпт."""
     shot, g = _shot_and_graph(db, shot_id)
-    frame = _shot_asset(db, shot_id, AssetType.frame)
-    if not frame or not frame.url:
-        raise HTTPException(400, "Нет ключевого кадра — сначала сгенерируй кадр (Фаза 3)")
-    frame_path = _media_fs_path(frame.url)
-    camera = {"motion": g.get("camera_preset", "General"),
-              "motion_strength": g.get("motion_strength", 0.6)}
-    base = (shot.camera_json or {}).get("frame_prompt") or shot.description
-    # модификаторы, подключённые к этапу «Шоты» (камера/свет/…), влияют на анимацию
-    prompt = _style_prefix(db, _shot_project_id(shot), "shots") + base
+    pid = _shot_project_id(shot)
+    frames = _frames_by_variant(db, shot_id)
+    mode = g.get("frame_mode", "single")
+    start = frames.get("start") if mode == "startend" else (frames.get("single") or frames.get("start"))
+    end = frames.get("end") if mode == "startend" else None
+    if not start or not start.url:
+        raise HTTPException(400, "Нет ключевого кадра — сначала сгенерируй или загрузи кадр в Раскадровке")
+    prov, model, fmt = _gen_ctx(db, pid, "shots")
+    camera = {"motion": g.get("camera_preset", "General"), "motion_strength": g.get("motion_strength", 0.6)}
+    prompt = _video_prompt(db, shot, g)
+    has_end = bool(end and end.url)
+    if has_end:
+        prompt += " @Image1 as the first frame, @Image2 as the last frame."
+    refs = [] if has_end else _ref_images(db, pid, "shots", limit=9)
+    if refs:
+        prompt += " Keep the character and setting consistent with the attached reference images."
+    quality = g.get("video_quality") or fmt["video_quality"]
+    draft = quality == "draft"
+    resolution = "720p" if draft else quality
+    duration = float(shot.duration or fmt["shot_duration"])
     try:
-        res = get_video_provider().image_to_video(frame_path, prompt, camera=camera)
+        res = prov.image_to_video(
+            _media_fs_path(start.url), prompt, camera=camera,
+            end_image=_media_fs_path(end.url) if has_end else None, reference_images=refs,
+            duration=duration, aspect_ratio=fmt["aspect_ratio"], resolution=resolution, draft=draft,
+            model=g.get("video_model") or model,
+        )
     except Exception as e:
-        raise HTTPException(502, f"Higgsfield DoP error: {e}")
+        raise HTTPException(502, f"{prov.name} video error: {e}")
     if not res.url:
-        raise HTTPException(502, "Провайдер не вернул URL видео")
-    _save_shot_asset(db, shot_id, AssetType.video, storage.save_from_url(res.url, ".mp4"), "higgsfield")
-    _log_usage(db, _shot_project_id(shot), "video", "higgsfield",
-               COST_USD["video_per_sec"] * (shot.duration or 5))
+        raise HTTPException(502, "Провайдер не вернул URL видео (похоже на отказ контент-фильтра — упрости промпт "
+                                 "или убери финальный кадр)")
+    _save_shot_asset(db, shot_id, AssetType.video, storage.save_from_url(res.url, ".mp4"), prov.name)
+    _log_usage(db, pid, "video", prov.name, COST_USD["video_per_sec"] * duration,
+               cu=estimate_cu("video", seconds=duration, resolution=resolution, draft=draft))
     db.commit()
     return _shot_dto(db, shot)
 
 
 @app.post("/api/shots/{shot_id}/lipsync:generate")
 def gen_lipsync(shot_id: str, db: Session = Depends(get_db)):
+    """Говорящий персонаж: кадр + озвучка. Krea → Seedance с референс-аудио; Higgsfield → Speak."""
     shot, g = _shot_and_graph(db, shot_id)
-    frame = _shot_asset(db, shot_id, AssetType.frame)
+    pid = _shot_project_id(shot)
+    frames = _frames_by_variant(db, shot_id)
+    frame = frames.get("single") or frames.get("start")
     voice = _shot_asset(db, shot_id, AssetType.voice)
     if not frame or not frame.url:
         raise HTTPException(400, "Нет кадра для липсинка")
     if not voice or not voice.url:
         raise HTTPException(400, "Нет озвучки — сначала сгенерируй голос")
+    prov, model, fmt = _gen_ctx(db, pid, "shots")
+    duration = max(4.0, float(shot.duration or fmt["shot_duration"]))
+    quality = g.get("video_quality") or fmt["video_quality"]
+    resolution = "1080p" if quality == "1080p" else "720p"
     try:
-        res = get_video_provider().lipsync(_media_fs_path(frame.url), _media_fs_path(voice.url))
+        res = prov.lipsync(_media_fs_path(frame.url), _media_fs_path(voice.url),
+                           prompt=_video_prompt(db, shot, g), duration=duration,
+                           aspect_ratio=fmt["aspect_ratio"], resolution=resolution,
+                           model=g.get("video_model") or model)
     except Exception as e:
-        raise HTTPException(502, f"Higgsfield Speak error: {e}")
+        raise HTTPException(502, f"{prov.name} lipsync error: {e}")
     if not res.url:
         raise HTTPException(502, "Провайдер не вернул URL липсинка")
-    _save_shot_asset(db, shot_id, AssetType.video, storage.save_from_url(res.url, ".mp4"), "higgsfield")
-    _log_usage(db, _shot_project_id(shot), "lipsync", "higgsfield", COST_USD["lipsync"])
+    _save_shot_asset(db, shot_id, AssetType.video, storage.save_from_url(res.url, ".mp4"), prov.name)
+    _log_usage(db, pid, "lipsync", prov.name, COST_USD["lipsync"],
+               cu=estimate_cu("video", seconds=duration, resolution=resolution))
     db.commit()
     return _shot_dto(db, shot)
+
+
+@app.post("/api/shots/{shot_id}:frame-upload")
+async def upload_frame(shot_id: str, variant: str = "single", file: UploadFile = File(...),
+                       db: Session = Depends(get_db)):
+    """Свой кадр раскадровки (фото продукта, готовый арт) вместо генерации."""
+    shot = db.get(Shot, shot_id)
+    if not shot:
+        raise HTTPException(404, "Шот не найден")
+    if variant not in _FRAME_HINT:
+        raise HTTPException(400, "variant: single|start|end")
+    stored = storage.save_bytes(await file.read(), _ext_of(file.filename, ".png"))
+    frame = _frames_by_variant(db, shot_id).get(variant)
+    if frame:
+        frame.url, frame.approved, frame.source = stored, False, "upload"
+        frame.version += 1
+    else:
+        db.add(Asset(shot_id=shot_id, type=AssetType.frame, url=stored, source="upload",
+                     params_json={"variant": variant}))
+    db.commit()
+    return _shot_dto(db, shot)
+
+
+@app.post("/api/shots/{shot_id}:video-upload")
+async def upload_shot_video(shot_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Своё видео шота (снятое или сгенерированное в другом месте)."""
+    shot = db.get(Shot, shot_id)
+    if not shot:
+        raise HTTPException(404, "Шот не найден")
+    _save_shot_asset(db, shot_id, AssetType.video, storage.save_bytes(await file.read(), _ext_of(file.filename, ".mp4")), "upload")
+    db.commit()
+    return _shot_dto(db, shot)
+
+
+@app.post("/api/concepts/{asset_id}:upload")
+async def upload_concept(asset_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Своя картинка концепта (референс клиента, фото продукта)."""
+    asset = db.get(Asset, asset_id)
+    if not asset or asset.type != AssetType.concept:
+        raise HTTPException(404, "Концепт не найден")
+    asset.url = storage.save_bytes(await file.read(), _ext_of(file.filename, ".png"))
+    asset.version += 1
+    asset.source, asset.approved = "upload", False
+    db.commit()
+    return _asset_dto(asset)
 
 
 # ---------- Настройки: API-подключения по этапам ----------
@@ -572,15 +713,16 @@ def generate_modifier_views(mid: str, db: Session = Depends(get_db)):
     views = _view_prompts(m.kind, desc, style)
     if not views:
         raise HTTPException(400, "У этого узла нет генерации видов")
-    provider = get_video_provider()
+    provider, model, fmt = _gen_ctx(db, m.project_id, "storyboard")
     out = list(m.refs_json or [])
     added, errors = 0, []
     for label, prompt in views:
         try:
-            res = provider.generate_image(prompt)
+            res = provider.generate_image(prompt, model=model, resolution=fmt["resolution"],
+                                          aspect_ratio="1:1" if m.kind == "character" else fmt["aspect_ratio"])
             if res.url:
                 out.append({"label": label, "url": storage.save_from_url(res.url)})
-                _log_usage(db, m.project_id, "concept", "higgsfield", COST_USD["concept"])
+                _log_usage(db, m.project_id, "concept", provider.name, COST_USD["concept"], cu=estimate_cu("image"))
                 added += 1
         except Exception as e:
             errors.append(f"{label}: {e}")
@@ -588,6 +730,63 @@ def generate_modifier_views(mid: str, db: Session = Depends(get_db)):
     db.commit()
     if added == 0 and errors:
         raise HTTPException(502, "; ".join(errors)[:400])
+    return _modifier_dto(m)
+
+
+@app.post("/api/modifiers/{mid}/generate")
+def generate_free(mid: str, body: GenerateIn, db: Session = Depends(get_db)):
+    """Узел «Генератор»: произвольная картинка/видео вне пайплайна (постер, обложка, отдельный клип,
+    оживление своей картинки). Результаты копятся в галерее узла."""
+    m = db.get(Modifier, mid)
+    if not m:
+        raise HTTPException(404, "Узел не найден")
+    prompt = (body.prompt or m.reference_text or "").strip()
+    if not prompt:
+        raise HTTPException(400, "Напиши промпт")
+    kind = "video" if body.kind == "video" else "image"
+    prov, model, fmt = _gen_ctx(db, m.project_id, "shots" if kind == "video" else "style")
+    aspect = body.aspect_ratio or fmt["aspect_ratio"]
+    start = _media_fs_path(body.start_image) if (body.start_image or "").startswith("/media/") else None
+    if kind == "video" and not start and not hasattr(prov, "text_to_video"):
+        raise HTTPException(400, "Текст→видео без стартовой картинки доступен только через Krea")
+    try:
+        if kind == "video":
+            quality = body.quality or fmt["video_quality"]
+            draft = quality == "draft"
+            resolution = "720p" if draft else quality
+            dur = float(body.duration or fmt["shot_duration"])
+            res = prov.image_to_video(start, prompt, duration=dur, aspect_ratio=aspect, resolution=resolution,
+                                      draft=draft, model=body.model or model)
+            ext, cu, cost = ".mp4", estimate_cu("video", seconds=dur, resolution=resolution, draft=draft), COST_USD["video_per_sec"] * dur
+        else:
+            res = prov.generate_image(prompt, model=body.model or model, aspect_ratio=aspect,
+                                      resolution=body.resolution or fmt["resolution"])
+            ext, cu, cost = ".png", estimate_cu("image"), COST_USD["concept"]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"{prov.name} error: {e}")
+    if not res.url:
+        raise HTTPException(502, "Провайдер не вернул результат (возможно, отказ контент-фильтра)")
+    url = storage.save_from_url(res.url, ext)
+    m.refs_json = list(m.refs_json or []) + [{"label": kind, "url": url, "model": body.model or model or prov.name,
+                                              "prompt": prompt[:200]}]
+    m.reference_text = prompt
+    _log_usage(db, m.project_id, "gen_" + kind, prov.name, cost, cu=cu)
+    db.commit()
+    return _modifier_dto(m)
+
+
+@app.delete("/api/modifiers/{mid}/refs/{index}")
+def delete_modifier_ref(mid: str, index: int, db: Session = Depends(get_db)):
+    m = db.get(Modifier, mid)
+    if not m:
+        raise HTTPException(404, "Узел не найден")
+    refs = list(m.refs_json or [])
+    if 0 <= index < len(refs):
+        refs.pop(index)
+        m.refs_json = refs
+        db.commit()
     return _modifier_dto(m)
 
 
@@ -756,9 +955,91 @@ def _save_shot_asset(db: Session, shot_id: str, atype: AssetType, url: str, sour
 
 
 def _media_fs_path(url: str) -> str:
-    """/media/<name> → локальный путь файла (для загрузки в Higgsfield)."""
+    """/media/<name> → локальный путь файла (провайдер сам загрузит его к себе)."""
     name = url.rsplit("/", 1)[-1]
     return os.path.join(settings.media_dir, name)
+
+
+def _ext_of(filename: str | None, default: str) -> str:
+    return os.path.splitext(filename or "")[1].lower() or default
+
+
+def _project_format(project: Project | None) -> dict:
+    """Формат ролика: дефолты + настройки проекта (aspect_ratio, resolution, video_quality, shot_duration, kind…)."""
+    fmt = dict(FORMAT_DEFAULTS)
+    if project:
+        fmt.update({k: v for k, v in (project.settings_json or {}).items() if v not in (None, "")})
+    return fmt
+
+
+def _stage_setting(db: Session, project_id: str | None, stage: str) -> StageSetting | None:
+    if not project_id:
+        return None
+    return db.query(StageSetting).filter(
+        StageSetting.project_id == project_id, StageSetting.stage == stage,
+        StageSetting.enabled == True,  # noqa: E712
+    ).first()
+
+
+def _gen_ctx(db: Session, project_id: str | None, stage: str) -> tuple[VideoProvider, str | None, dict]:
+    """Провайдер + модель + формат для этапа: включённая настройка этапа > VIDEO_PROVIDER из .env."""
+    project = db.get(Project, project_id) if project_id else None
+    fmt = _project_format(project)
+    row = _stage_setting(db, project_id, stage)
+    if row and row.provider == "krea":
+        return KreaProvider(api_key=row.api_key or None, base_url=row.base_url or None), (row.model or None), fmt
+    if row and row.provider == "higgsfield":
+        return HiggsfieldProvider(), None, fmt
+    return get_video_provider(), None, fmt
+
+
+def _audio_route(db: Session, project_id: str | None) -> tuple[str, KreaProvider | None]:
+    """Музыка: настройка этапа «Шоты» → иначе Krea при наличии ключа (ElevenLabs Music закрыт тарифом) → ElevenLabs."""
+    row = _stage_setting(db, project_id, "shots")
+    if row and row.provider == "elevenlabs":
+        return "elevenlabs", None
+    if row and row.provider == "krea":
+        return "krea", KreaProvider(api_key=row.api_key or None, base_url=row.base_url or None)
+    if settings.krea_api_key.strip():
+        return "krea", KreaProvider()
+    return "elevenlabs", None
+
+
+def _ref_images(db: Session, project_id: str | None, stage: str, limit: int = 4) -> list[str]:
+    """Картинки включённых модификаторов, подключённых к этапу (стиль/персонаж/локация) → локальные пути."""
+    if not project_id:
+        return []
+    mods = db.query(Modifier).filter(
+        Modifier.project_id == project_id, Modifier.kind.in_(ALL_MOD_KINDS),
+        Modifier.enabled == True,  # noqa: E712
+    ).all()
+    out: list[str] = []
+    for m in mods:
+        if stage not in _mod_targets(m):
+            continue
+        for r in (m.refs_json or []):
+            u = r.get("url") if isinstance(r, dict) else r
+            if u and str(u).startswith("/media/"):
+                out.append(_media_fs_path(u))
+    return out[:limit]
+
+
+def _frames_by_variant(db: Session, shot_id: str) -> dict[str, Asset]:
+    rows = db.query(Asset).filter(Asset.shot_id == shot_id, Asset.type == AssetType.frame).all()
+    return {(a.params_json or {}).get("variant", "single"): a for a in rows}
+
+
+def _video_prompt(db: Session, shot: Shot, g: dict) -> str:
+    """Промпт анимации: описание кадра + камера/свет + подключённые модификаторы этапа «Шоты»."""
+    base = (shot.camera_json or {}).get("frame_prompt") or shot.description
+    parts = [_style_prefix(db, _shot_project_id(shot), "shots") + base]
+    cam = g.get("camera_preset") or (shot.camera_json or {}).get("movement")
+    if cam and cam != "General":
+        parts.append(f"Camera: {cam}, motion strength {g.get('motion_strength', 0.6)}.")
+    if shot.lighting_prompt:
+        parts.append(f"Light: {shot.lighting_prompt}.")
+    parts.append("Smooth, natural realtime motion, cinematic quality.")
+    return " ".join(parts)
 
 
 # Ориентировочная стоимость генераций (USD) — для счётчика расходов.
@@ -766,9 +1047,9 @@ COST_USD = {"concept": 0.05, "frame": 0.05, "voice": 0.01, "sfx": 0.01,
             "music": 0.02, "video_per_sec": 0.10, "lipsync": 0.10}
 
 
-def _log_usage(db: Session, project_id: str | None, kind: str, provider: str, cost: float) -> None:
+def _log_usage(db: Session, project_id: str | None, kind: str, provider: str, cost: float, cu: int = 0) -> None:
     db.add(Job(provider=provider, status=JobStatus.done,
-               payload={"project_id": project_id, "kind": kind, "cost": round(cost, 4)}))
+               payload={"project_id": project_id, "kind": kind, "cost": round(cost, 4), "cu": int(cu)}))
 
 
 def _project_cost(db: Session, project_id: str) -> float:
@@ -778,6 +1059,16 @@ def _project_cost(db: Session, project_id: str) -> float:
         if p.get("project_id") == project_id:
             total += float(p.get("cost", 0) or 0)
     return round(total, 2)
+
+
+def _project_cu(db: Session, project_id: str) -> int:
+    """Сумма compute units Krea по проекту (оценка)."""
+    total = 0
+    for j in db.query(Job).filter(Job.status == JobStatus.done).all():
+        p = j.payload or {}
+        if p.get("project_id") == project_id:
+            total += int(p.get("cu", 0) or 0)
+    return total
 
 
 def _shot_project_id(shot: Shot) -> str | None:
@@ -796,6 +1087,8 @@ def _shot_dto(db: Session, s: Shot) -> dict:
         "camera": cam.get("movement", ""), "lighting": s.lighting_prompt,
         "duration": s.duration, "status": s.status,
         "frame_mode": g.get("frame_mode", "single"),
+        "video_quality": g.get("video_quality", ""),
+        "video_model": g.get("video_model", ""), "music_vocals": bool(g.get("music_vocals", False)),
         "frame_single": frames.get("single", ""),
         "frame_start": frames.get("start", ""),
         "frame_end": frames.get("end", ""),
@@ -831,7 +1124,8 @@ def _project_dto(p: Project, db: Session) -> dict:
     return {
         "id": p.id, "title": p.title, "stage": p.stage, "status": p.status,
         "final_url": final.url if final else "",
-        "cost_usd": _project_cost(db, p.id),
+        "cost_usd": _project_cost(db, p.id), "compute_units": _project_cu(db, p.id),
+        "format": _project_format(p),
         "brief_text": p.brief_text, "logline": p.logline,
         "scenes": [
             {
