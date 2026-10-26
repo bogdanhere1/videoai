@@ -19,11 +19,14 @@ nano .env   # заполнить ключи (см. ниже)
 - `DATABASE_URL=postgresql+psycopg://studio:<POSTGRES_PASSWORD>@db:5432/videoai`
 - `GEMINI_API_KEY` (формат `AQ.…`), `GEMINI_MODEL=gemini-3.1-flash-lite`
 - `ELEVENLABS_API_KEY`
-- `HIGGSFIELD_API_KEY=key:secret` (со страницы cloud.higgsfield.ai/api-keys)
-- `VIDEO_PROVIDER=native`
+- `KREA_API_KEY` — токен с krea.ai/settings/api-tokens (картинки/видео/музыка)
+- `HIGGSFIELD_API_KEY=key:secret` (со страницы cloud.higgsfield.ai/api-keys) — опционально
+- `VIDEO_PROVIDER=auto` (Krea при наличии ключа, иначе Higgsfield; можно `krea` / `higgsfield`)
 
-> Для генерации Higgsfield нужен **пополненный API-баланс** на cloud.higgsfield.ai
-> (отдельно от веб-подписки). Музыка ElevenLabs требует соответствующего тарифа.
+> Krea: HTTP-токен списывает с **отдельного API-баланса** (krea.ai/app/api, пополнение от $5) —
+> не с compute units веб-плана; при 402 пополнить. Музыка идёт через Krea (ElevenLabs Music v2.5),
+> поэтому тариф ElevenLabs для музыки не нужен.
+> Higgsfield: нужен **пополненный API-баланс** на cloud.higgsfield.ai (отдельно от веб-подписки).
 
 ## 3. Домен и доступ
 В `Caddyfile` заменить `:80` на свой домен (авто-HTTPS). Включить логин/пароль:
